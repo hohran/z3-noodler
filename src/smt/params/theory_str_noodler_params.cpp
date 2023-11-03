@@ -19,4 +19,5 @@ void theory_str_noodler_params::display(std::ostream & out) const {
     DISPLAY_PARAM(m_preprocess_red);
     DISPLAY_PARAM(m_loop_protect);
     DISPLAY_PARAM(m_try_nielsen);
+    DISPLAY_PARAM(m_try_length_proc);
 }
