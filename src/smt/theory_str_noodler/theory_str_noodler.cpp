@@ -861,11 +861,8 @@ namespace smt::noodler {
         if(m_params.m_try_length_proc && LengthDecisionProcedure::is_suitable(instance, aut_assignment)) {
             lbool result = run_length_proc(instance, aut_assignment, init_length_sensitive_vars);
             if(result == l_true) {
-                STRACE("str", tout << "Sat from length procedure.\n"; );
                 return FC_DONE;
             } else if(result == l_false) {
-
-                STRACE("str", tout << "Unsat from length procedure.\n"; );
                 return FC_CONTINUE;
             }
         }
@@ -897,7 +894,6 @@ namespace smt::noodler {
             block_curr_len(lengths, true, true);
             return FC_CONTINUE;
         }
-    
 
         STRACE("str", tout << "Starting main decision procedure" << std::endl);
         dec_proc.init_computation();
