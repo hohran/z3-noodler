@@ -18,6 +18,151 @@
 
 namespace smt::noodler {
 
+//////////////////////////////////
+
+typedef struct LiteralAggregate_t {
+    zstring parent_var;
+    zstring literal_name;
+} LiteralAggregate;
+
+class VarConstraint
+{
+private:
+	zstring _name;
+	std::vector<Concat> _constr_eqs;	// All sides of equations on the opposite side of this variable
+
+	std::vector<LiteralAggregate> _lits; // Literals occuring explicitly and in contained variables
+
+	// std::map<zstring, zstring>& conv;
+public:
+	lbool is_parsed;
+	VarConstraint() : _name(), is_parsed (l_false) {};
+	VarConstraint(zstring name) : _name(std::move(name)), is_parsed (l_false) {};
+	bool check_side(const Concat& side) {
+		return side.size() == 1 && side[0].get_name() == _name;
+	}
+	bool add(const Predicate& pred) {
+		if (check_side(pred.get_left_side())) {
+			_constr_eqs.emplace_back(pred.get_right_side());
+			return true;
+		}
+		if (check_side(pred.get_right_side())) {
+			_constr_eqs.emplace_back(pred.get_left_side());
+			return true;
+		}
+
+		return false;
+	}
+
+	// !!! Must be called after parse !!!
+	const std::vector<LiteralAggregate>& get_lits() const {
+		return _lits;
+	}
+
+	// TODO: already generate here
+	/**
+	 * @brief parse var constraint
+	 * 
+	 * @param pool all var constraints
+	 * @param conv conversions for literals
+	 * @return bool success
+	 */
+	bool parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,zstring>& conv) {
+		if (is_parsed == l_true) {
+			return true;	// Already parsed
+		}
+
+		if (is_parsed == l_undef) {
+			return false;	// Cycle
+		}
+
+		is_parsed = l_undef;	// Currently in parsing
+
+		for (const Concat& side : _constr_eqs) {
+			for (const BasicTerm& t : side) {
+				if (t.get_type() == BasicTermType::Literal) {
+					zstring new_lit_name = util::mk_noodler_var_fresh("lit").get_name();
+					conv[new_lit_name] = t.get_name();
+					_lits.emplace_back(LiteralAggregate{.parent_var = "", .literal_name = new_lit_name});
+				} else if (t.get_type() == BasicTermType::Variable) {
+
+					// If the var is constrained
+					if (pool.count(t.get_name())) {
+						if (pool[t.get_name()].parse(pool, conv) == false) {
+							return false;	// There is a cycle: propagate
+						}
+						
+						for (const LiteralAggregate& l : pool[t.get_name()].get_lits()) {
+							_lits.emplace_back(LiteralAggregate{.parent_var = t.get_name(), .literal_name = l.literal_name});
+						}
+					}
+				}
+			}
+		}
+
+		is_parsed = l_true;
+		return true;
+	}
+
+	std::string to_string() const {
+		std::string ret = "#####\n# VarConstraint: " + _name.encode() + "\n###\n#";
+		bool first = true;
+		for (const Concat& side : _constr_eqs) {
+			if (!first) {
+				ret += " =";
+			}
+			first = false;
+
+			for (const BasicTerm& term : side) {
+				// Literals will be displayed just by their name, not by value
+				ret += " " + term.to_string();
+			}
+		}
+
+		ret += "\n###\n# lits:";
+
+		for (const LiteralAggregate& t :_lits) {
+			// for explicit: ... lname ...
+			// for derived: ... lname (vname) ...
+			ret += " " + t.literal_name.encode() + ((t.parent_var == "") ? "" : ("("+t.parent_var.encode()+")"));
+		}
+
+		ret += "\n#####\n";
+		return ret;
+	}
+};
+
+static std::ostream& operator<<(std::ostream& os, const VarConstraint& vcon) {
+    os << vcon.to_string();
+    return os;
+}
+
+void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) {
+	bool in_pool = false;
+
+	for (const Concat& side : pred.get_params()) {
+		if (side.size() == 1 && side[0].get_type() == BasicTermType::Variable) {
+			zstring var_name = side[0].get_name();
+			if (pool.count(var_name) == 0) {
+				pool[var_name] = VarConstraint(var_name);
+				pool[var_name].add(pred);
+			} else {
+				pool[var_name].add(pred);
+			}
+
+			in_pool = true;
+		}
+	}
+
+	if (!in_pool) {
+		zstring fresh = util::mk_noodler_var_fresh("f").get_name();
+		pool[fresh] = VarConstraint(fresh);
+	}
+}
+
+
+///////////////////////////////////
+
     // TODO: this is nastyy
     BasicTerm begin_of(zstring of, zstring from) {
         return BasicTerm(BasicTermType::Variable, "BEGIN_OF_" + of.encode() + "_FROM_" + from.encode());
