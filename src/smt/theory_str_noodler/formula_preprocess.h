@@ -58,10 +58,16 @@ namespace smt::noodler {
 
     template<typename T>
     bool set_disjoint(const std::unordered_set<T>& t1, const std::set<T>& t2) {
-        std::set<T> inter;
-        for(const auto& t : t2) {
-            if(t1.find(t) != t1.end())
-                return false;
+        if (t1.size() < t2.size()) {
+            for(const auto& t : t1) {
+                if(t2.contains(t))
+                    return false;
+            }
+        } else {
+            for(const auto& t : t2) {
+                if(t1.contains(t))
+                    return false;
+            }
         }
         return true;
     }
@@ -225,7 +231,7 @@ namespace smt::noodler {
     using VarMap = std::map<BasicTerm, std::set<VarNode>>;
     using VarNodeSymDiff = std::pair<std::set<VarNode>, std::set<VarNode>>;
     using Concat = std::vector<BasicTerm>;
-    using SepEqsGather = std::vector<std::pair<std::set<BasicTerm>, unsigned>>;
+    using SepEqsGather = std::vector<std::pair<std::map<BasicTerm, unsigned>, unsigned>>;
     using Dependency = std::map<size_t, std::set<size_t>>;
 
     /**
@@ -293,6 +299,8 @@ namespace smt::noodler {
 
     //----------------------------------------------------------------------------------------------------------------------------------
 
+    using TermReplaceMap = std::map<BasicTerm, std::set<Concat>>;
+
     /**
      * @brief Class for formula preprocessing.
      */
@@ -324,6 +332,13 @@ namespace smt::noodler {
         void gather_extended_vars(Predicate::EquationSideType side, std::set<BasicTerm>& res);
 
         bool same_length(const BasicTermEqiv& ec, const BasicTerm&t1, const BasicTerm& t2) const;
+        
+        bool add_var_separator(const Concat& side, std::map<BasicTerm, std::set<BasicTerm>>& container);
+        bool propagate_var_separators(const BasicTerm& dest, const BasicTerm& src, std::map<BasicTerm, std::map<BasicTerm, std::set<BasicTerm>>>& separators);
+        Concat flatten_concat(const Concat& con, std::map<BasicTerm, std::set<Concat>>& replace_map) const;
+        bool can_unify(const Concat& con1, const Concat& con2, const std::function<bool(const Concat&, const Concat&)> &check) const;
+        TermReplaceMap construct_replace_map() const;
+
 
     public:
         FormulaPreprocessor(Formula conj, AutAssignment ass, std::unordered_set<BasicTerm> lv, const theory_str_noodler_params &par) :
@@ -348,7 +363,7 @@ namespace smt::noodler {
 
         Formula get_modified_formula() const;
 
-        void remove_regular();
+        void remove_regular(const std::unordered_set<BasicTerm>& disallowed_vars);
         void propagate_variables();
         void propagate_eps();
         void generate_identities();
@@ -359,11 +374,16 @@ namespace smt::noodler {
         void skip_len_sat();
         void underapprox_languages();
         void generate_equiv(const BasicTermEqiv& ec);
+        void infer_alignment();
+        void common_prefix_propagation();
 
         void refine_languages();
         void reduce_diseqalities();
 
-        bool contains_unsat_eqs_or_diseqs() const;
+        bool contains_unsat_eqs_or_diseqs();
+        bool can_unify_contain(const Concat& left, const Concat& right) const;
+
+        void conversions_validity(std::vector<TermConversion>& conversions);
 
         /**
          * @brief Replace all occurrences of find with replace. Warning: do not modify the automata assignment.

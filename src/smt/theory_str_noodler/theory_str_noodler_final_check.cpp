@@ -161,22 +161,22 @@ namespace smt::noodler {
         return init_lengths;
     }
 
-    std::vector<std::tuple<BasicTerm,BasicTerm,ConversionType>> theory_str_noodler::get_conversions_as_basicterms(AutAssignment& ass, const std::set<mata::Symbol>& noodler_alphabet) {
+    std::vector<TermConversion> theory_str_noodler::get_conversions_as_basicterms(AutAssignment& ass, const std::set<mata::Symbol>& noodler_alphabet) {
         mata::EnumAlphabet mata_alphabet(noodler_alphabet.begin(), noodler_alphabet.end());
         auto nfa_sigma_star = std::make_shared<mata::nfa::Nfa>(mata::nfa::builder::create_sigma_star_nfa(&mata_alphabet));
         
-        std::vector<std::tuple<BasicTerm,BasicTerm,ConversionType>> conversions;
+        std::vector<TermConversion> conversions;
         for (const auto& transf : m_conversion_todo) {
             BasicTerm result(BasicTermType::Variable, to_app(std::get<0>(transf))->get_decl()->get_name().str());
             BasicTerm argument(BasicTermType::Variable, to_app(std::get<1>(transf))->get_decl()->get_name().str());
             ConversionType type = std::get<2>(transf);
 
-            conversions.emplace_back(result, argument, type);
-
             if (type == ConversionType::FROM_CODE || type == ConversionType::FROM_INT) {
+                conversions.emplace_back(type, result, argument);
                 var_name.insert({result, expr_ref(std::get<0>(transf), m)});
                 ass.insert({result, nfa_sigma_star});
             } else {
+                conversions.emplace_back(type, argument, result);
                 var_name.insert({argument, expr_ref(std::get<1>(transf), m)});
                 ass.insert({argument, nfa_sigma_star});
             }
@@ -227,15 +227,15 @@ namespace smt::noodler {
 
     lbool theory_str_noodler::solve_underapprox(const Formula& instance, const AutAssignment& aut_assignment,
                                                 const std::unordered_set<BasicTerm>& init_length_sensitive_vars,
-                                                std::vector<std::tuple<BasicTerm,BasicTerm,ConversionType>> conversions) {
+                                                std::vector<TermConversion> conversions) {
         DecisionProcedure dec_proc = DecisionProcedure{ instance, aut_assignment, init_length_sensitive_vars, m_params, conversions };
-        if (dec_proc.preprocess(PreprocessType::UNDERAPPROX) == l_false) {
+        if (dec_proc.preprocess(PreprocessType::UNDERAPPROX, this->var_eqs.get_equivalence_bt()) == l_false) {
             return l_false;
         }
 
         dec_proc.init_computation();
         while(dec_proc.compute_next_solution() == l_true) {
-            expr_ref lengths = len_node_to_z3_formula(dec_proc.get_lengths());
+            expr_ref lengths = len_node_to_z3_formula(dec_proc.get_lengths().first);
             if(check_len_sat(lengths) == l_true) {
                 return l_true;
             }
@@ -296,6 +296,11 @@ namespace smt::noodler {
                 ctx.internalize(in_app, false);
             }
             refinement = refinement == nullptr ? in_app : m.mk_and(refinement, in_app);
+        }
+
+        for(const auto& nc : this->m_not_contains_todo_rel) {
+            app_ref nc_app(m.mk_not(m_util_s.str.mk_contains(nc.first, nc.second)), m);
+            refinement = refinement == nullptr ? nc_app : m.mk_and(refinement, nc_app);
         }
         
         if(m_params.m_loop_protect && add_axiomatized) {
@@ -417,31 +422,39 @@ namespace smt::noodler {
         }
     }
 
-    bool theory_str_noodler::is_nielsen_suitable(const Formula& instance) const {
+    bool theory_str_noodler::is_nielsen_suitable(const Formula& instance, const std::unordered_set<BasicTerm>& init_length_sensitive_vars) const {
         if(!this->m_membership_todo_rel.empty() || !this->m_not_contains_todo_rel.empty() || !this->m_conversion_todo.empty()) {
             return false;
         }
-        if(!instance.is_quadratic()) {
+
+        if(init_length_sensitive_vars.size() > 0 && !instance.is_quadratic()) {
             return false;
         }
+
         Graph incl = Graph::create_inclusion_graph(instance);
         return incl.is_cyclic();
     }
 
-    bool theory_str_noodler::is_underapprox_suitable(const Formula& instance, const AutAssignment& aut_ass) const {
-        int ln = 0;
+    bool theory_str_noodler::is_underapprox_suitable(const Formula& instance, const AutAssignment& aut_ass, const std::vector<TermConversion>& convs) const {
+        if(!convs.empty()) {
+            return false;
+        }
         /**
          * Check each variable occurring within the instance. The instance is suitable for underapproximation if 
-         * language of the variable is 1) sigma star (approximated by the first condition) 2) co-finite (complement is a finite language), or 
-         * 3) singleton meaning that the variable is string literal. 
+         * 1) predicates are (dis)equations only and 2) language of the variable is a) sigma star (approximated by 
+         * the first condition) b) co-finite (complement is a finite language), or c) singleton meaning that the 
+         * variable is string literal. 
          */
         for(const Predicate& pred : instance.get_predicates()) {
+            if(!pred.is_eq_or_ineq()) {
+                return false;
+            }
             for(const BasicTerm& var : pred.get_vars()) {
                 
                 if(aut_ass.at(var)->num_of_states() <= 1) {
                     continue;
                 }
-                if(aut_ass.is_co_finite(var, ln)) {
+                if(aut_ass.is_co_finite(var)) {
                     continue;
                 }
                 if(aut_ass.is_singleton(var)) {
@@ -462,7 +475,7 @@ namespace smt::noodler {
         while (true) {
             lbool result = nproc.compute_next_solution();
             if (result == l_true) {
-                expr_ref lengths = len_node_to_z3_formula(nproc.get_lengths());
+                expr_ref lengths = len_node_to_z3_formula(nproc.get_lengths().first);
                 if (check_len_sat(lengths) == l_true) {
                     return l_true;
                 } else {
@@ -594,5 +607,20 @@ namespace smt::noodler {
             }
         }
         return l_undef;
+    }
+
+    lbool theory_str_noodler::run_length_sat(const Formula& instance, const AutAssignment& aut_ass,
+                                const std::unordered_set<BasicTerm>& init_length_sensitive_vars,
+                                std::vector<TermConversion> conversions) {
+
+        DecisionProcedure dec_proc = DecisionProcedure{ instance, aut_ass, init_length_sensitive_vars, m_params, conversions };
+        expr_ref lengths = len_node_to_z3_formula(dec_proc.get_initial_lengths());
+        if(check_len_sat(lengths) == l_false) {
+            STRACE("str", tout << "Unsat from initial lengths (one symbol)" << std::endl);
+            block_curr_len(lengths, true, true);
+            return l_false;
+        } else {
+            return l_true;
+        }
     }
 }

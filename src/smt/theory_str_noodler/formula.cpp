@@ -3,7 +3,6 @@
 
 namespace smt::noodler {
     std::set<BasicTerm> Predicate::get_vars() const {
-        assert(is_eq_or_ineq());
         std::set<BasicTerm> vars;
         for (const auto& side: params) {
             for (const auto &term: side) {
@@ -167,6 +166,21 @@ namespace smt::noodler {
                 throw std::runtime_error("unhandled equation side type");
                 break;
         }
+    }
+
+    std::map<BasicTerm, unsigned> Predicate::variable_count(const Predicate::EquationSideType side) const {
+        std::map<BasicTerm, unsigned> occurr;
+        BasicTerm litTerm(BasicTermType::Literal, "");
+        unsigned lits = 0;
+        for(const BasicTerm& b : this->get_side(side)) {
+            if(b.is_variable()) {
+                occurr[b]++;
+            } else {
+                lits += b.get_name().length();
+            }
+        }
+        occurr[litTerm] = lits;
+        return occurr;
     }
 
     std::string BasicTerm::to_string() const {

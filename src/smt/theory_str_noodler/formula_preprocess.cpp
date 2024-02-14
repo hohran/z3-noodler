@@ -298,12 +298,14 @@ namespace smt::noodler {
     }
 
     /**
-     * @brief Iteratively remove regular predicates. A regular predicate is of the form X = X_1 X_2 ... X_n where
+     * Iteratively remove regular predicates. A regular predicate is of the form X = X_1 X_2 ... X_n where
      * X_1 ... X_n does not occurr elsewhere in the system. Formally, L = R is regular if |L| = 1 and each variable
      * from Vars(R) has a single occurrence in the system only. Regular predicates can be removed from the system
      * provided A(X) = A(X) \cap A(X_1).A(X_2)...A(X_n) where A(X) is the automaton assigned to variable X.
+     * 
+     * @param disallowed_vars - if any of these var occurs in equation, it cannot be removed
      */
-    void FormulaPreprocessor::remove_regular() {
+    void FormulaPreprocessor::remove_regular(const std::unordered_set<BasicTerm>& disallowed_vars) {
         std::vector<std::pair<size_t, Predicate>> regs;
         this->formula.get_side_regulars(regs);
         std::deque<std::pair<size_t, Predicate>> worklist(regs.begin(), regs.end());
@@ -312,7 +314,14 @@ namespace smt::noodler {
             std::pair<size_t, Predicate> pr = worklist.front();
             worklist.pop_front();
 
+            STRACE("str-prep-remove_regular", tout << "Remove regular:" << pr.second << std::endl;);
+
             assert(pr.second.get_left_side().size() == 1);
+
+            bool contains_disallowed = !set_disjoint(disallowed_vars, pr.second.get_vars());
+            if (contains_disallowed) {
+                continue;
+            }
 
             // if right side contains len vars (except when we have X = Y), we must do splitting => cannot remove
             bool is_right_side_len = !set_disjoint(this->len_variables, pr.second.get_side_vars(Predicate::EquationSideType::Right));
@@ -332,6 +341,7 @@ namespace smt::noodler {
             }
 
             this->formula.remove_predicate(pr.first);
+            STRACE("str-prep-remove_regular", tout << "removed" << std::endl;);
 
             // check if by removing the regular equation, some other equations did not become regular
             // we only need to check this for left_var, as the variables from the right side do not occur
@@ -640,6 +650,7 @@ namespace smt::noodler {
                 BasicTerm fresh_var = util::mk_noodler_var_fresh("regular_seq");
                 this->formula.replace(pr.first, Concat({fresh_var}));
                 update_reg_constr(fresh_var, pr.first);
+                this->add_to_len_formula(Predicate(PredicateType::Equation, std::vector<Concat>({Concat({fresh_var}), pr.first})).get_formula_eq());
                 new_eqs.insert(Predicate(PredicateType::Equation, std::vector<Concat>({Concat({fresh_var}), pr.first})));
             }
         }
@@ -740,15 +751,16 @@ namespace smt::noodler {
      * @brief Gather information about a concatenation for equation separation.
      *
      * @param concat Concatenation
-     * @param res vector where i-th position contains a pair (S,n) where S is a set of variables
-     *  preceeding position i in @p concat and n is a length of all literals preceeding @p concat.
+     * @param res vector where i-th position contains a pair (M,n) where M is a map mapping variables to 
+     * the number of their occurrences (multimap) preceeding position i in @p concat and n is a length of all 
+     * literals preceeding @p concat.
      */
     void FormulaPreprocessor::get_concat_gather(const Concat& concat, SepEqsGather& res) const {
-        std::pair<std::set<BasicTerm>, unsigned> prev = { std::set<BasicTerm>(), 0 };
+        std::pair<std::map<BasicTerm, unsigned>, unsigned> prev = { std::map<BasicTerm,unsigned>(), 0 };
         for(const BasicTerm& t : concat) {
-            std::pair<std::set<BasicTerm>, unsigned> new_val(prev);
+            std::pair<std::map<BasicTerm, unsigned>, unsigned> new_val(prev);
             if(t.is_variable()) {
-                new_val.first.insert(t);
+                new_val.first[t]++;
             } else if(t.is_literal()) {
                 new_val.second += t.get_name().length();
             } else {
@@ -807,7 +819,6 @@ namespace smt::noodler {
     void FormulaPreprocessor::separate_eqs() {
         std::set<Predicate> add_eqs;
         std::set<size_t> rem_ids;
-        std::map<Predicate, std::set<size_t>> deps; // local dependencies
 
         for(const auto& pr : this->formula.get_predicates()) {
             if(!pr.second.is_equation())
@@ -817,21 +828,14 @@ namespace smt::noodler {
             get_concat_gather(pr.second.get_left_side(), gather_left);
             get_concat_gather(pr.second.get_right_side(), gather_right);
             separate_eq(pr.second, gather_left, gather_right, res);
-
             if(res.size() > 1) {
-                // update dependencies of added predicates
-                for(const Predicate& p : res) {
-                    map_set_insert(deps, p, pr.first);
-                }
                 add_eqs.insert(res.begin(), res.end());
                 rem_ids.insert(pr.first);
             }
         }
 
         for(const Predicate& p : add_eqs) {
-            int index = this->formula.add_predicate(p);
-            // update dependencies
-            this->dependency[index] = deps[p];
+            this->formula.add_predicate(p);
         }
         for(const size_t & i : rem_ids) {
             this->formula.remove_predicate(i);
@@ -1044,13 +1048,19 @@ namespace smt::noodler {
 
             if(pr.second.get_left_side().size() == 1) {
                 BasicTerm var = pr.second.get_left_side()[0];
-                if(ineq_vars.find(var) != ineq_vars.end())
+                if(ineq_vars.find(var) != ineq_vars.end()) {
                     update_reg_constr(var, pr.second.get_right_side());
+                } else if(pr.second.get_right_side().size() == 1) {
+                    update_reg_constr(var, pr.second.get_right_side());
+                }
             }
             if(pr.second.get_right_side().size() == 1) {
                 BasicTerm var = pr.second.get_right_side()[0];
-                if(ineq_vars.find(var) != ineq_vars.end())
+                if(ineq_vars.find(var) != ineq_vars.end()) {
                     update_reg_constr(var, pr.second.get_left_side());
+                } else if(pr.second.get_left_side().size() == 1) {
+                    update_reg_constr(var, pr.second.get_left_side());
+                }
             }
         }
 
@@ -1145,7 +1155,23 @@ namespace smt::noodler {
                 for(size_t i = 0; i < std::min(pc1.get_right_side().size(), pc2.get_right_side().size()); i++) {
                     BasicTerm t1 = pc1.get_right_side()[i];
                     BasicTerm t2 = pc2.get_right_side()[i];
-                    if(same_length(ec, t1, t2)) {
+                    if(t1 == t2) {
+                        continue;
+                    } else if(same_length(ec, t1, t2)) {
+                        Predicate new_pred(PredicateType::Equation, {Concat({t1}), Concat({t2})});
+                        new_preds.insert(new_pred);
+                    } else {
+                        break;
+                    }
+                }
+
+                int i = int(pc1.get_right_side().size() - 1), j = int(pc2.get_right_side().size() - 1);
+                for(; i >= 0 && j >= 0; i--, j--) {
+                    BasicTerm t1 = pc1.get_right_side()[i];
+                    BasicTerm t2 = pc2.get_right_side()[j];
+                    if(t1 == t2) {
+                        continue;
+                    } else if(same_length(ec, t1, t2)) {
                         Predicate new_pred(PredicateType::Equation, {Concat({t1}), Concat({t2})});
                         new_preds.insert(new_pred);
                     } else {
@@ -1179,18 +1205,196 @@ namespace smt::noodler {
     }
 
     /**
+     * @brief Infer equalities from required alignments. For instance for 
+     * X = Y1 "A" Y2
+     * X = Z1 "A" Z2 where "A" not in L(Y1) and "A" not in L(Z1)
+     * infer Y1 = Z1.
+     * 
+     * Works also for a propagated case, for instance
+     * X = Y1 "A" Y2
+     * X = W Z2 
+     * W = Z1 "A" Z3 where "A" not in L(Y1) and "A" not in L(Z1)
+     */
+    void FormulaPreprocessor::infer_alignment() {
+        using VarSeparator = std::map<BasicTerm, std::set<BasicTerm>>;
+        // separators for each variable: map of literals -> set of basic terms: 
+        // for each literal (L) contains terms (T) that preceeds that literal: there is equation ... = T L
+        std::map<BasicTerm, VarSeparator> separators {};
+
+        bool changed = true;
+        while(changed) {
+            changed = false;
+            for(const auto& pr : this->formula.get_predicates()) {
+                if(!pr.second.is_equation()) continue;
+                if(pr.second.get_left_side().size() != 1) continue;
+
+                // base case
+                const Concat& side = pr.second.get_right_side();
+                const BasicTerm& left_var = pr.second.get_left_side()[0];
+                if(pr.second.get_left_side().size() == 1) {
+                    changed = changed || add_var_separator(side, separators[left_var]);
+                }
+
+                // propagation of var separators
+                // for the case X = Y .... -> add separators from Y to X
+                if(side.size() > 0 && side[0] != left_var) {
+                    changed = changed || propagate_var_separators(left_var, side[0], separators);
+                }
+            }
+        }
+
+        // construct new equations from computed separators
+        for(const auto& pr : separators) {
+            for(const auto& a : pr.second) {
+                if(a.second.size() <=  1) continue;
+                BasicTerm fst = *a.second.begin();
+                for(const BasicTerm& dest : a.second) {
+                    if(dest != fst) {
+                        this->formula.add_predicate(Predicate( PredicateType::Equation, {Concat{fst}, Concat{dest}}));
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @brief Propagate variable separators. Add separators from variable @p src to the variable @p dest. 
+     * 
+     * @param dest Variable to be updated
+     * @param src Variable whose separators are copied to @p dest.
+     * @param separators Separators
+     * @return true <-> the propagation added a new element to @p separators.
+     */
+    bool FormulaPreprocessor::propagate_var_separators(const BasicTerm& dest, const BasicTerm& src, std::map<BasicTerm, std::map<BasicTerm, std::set<BasicTerm>>>& separators) {
+        bool changed = false;
+        for(const auto& var_sep: separators[src]) {
+            std::set<BasicTerm>& st = separators[dest][var_sep.first];
+            size_t before = st.size();
+            st.insert(var_sep.second.begin(), var_sep.second.end());
+            changed = changed || st.size() != before;
+        }
+        return changed;
+    }
+
+    /**
+     * @brief Add a new separator to @p container (separators of a variable).
+     * 
+     * @param side Equations side to be used for the update
+     * @param container Separators of a variable
+     * @return true <-> a new element was added to @p container.
+     */
+    bool FormulaPreprocessor::add_var_separator(const Concat& side, std::map<BasicTerm, std::set<BasicTerm>>& container) {
+        if(side.size() < 2) {
+            return false;
+        }
+        if(!side[1].is_literal()) {
+            return false;
+        }
+        if(this->aut_ass.are_disjoint(side[0], side[1])) {
+            if(container[side[1]].contains(side[0])) {
+                return false;
+            }
+            container[side[1]].insert(side[0]);
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Propagate equations from a common prefix. For instance for
+     * X = W1 W2 Y
+     * X = W1 W2 W3 W4
+     * infer Y = W3 W4.
+     * 
+     * Works also for a propagated case, for instance
+     * X = W1 W2 Y
+     * X = K W3 W4
+     * K = W1 W2
+     * infer Y = W3 W4
+     */
+    void FormulaPreprocessor::common_prefix_propagation() {
+        TermReplaceMap replace_map = construct_replace_map();
+        size_t i = 0;
+        for(const auto& pr1 : this->formula.get_predicates()) {
+            if(!pr1.second.is_equation()) continue;
+
+            Concat c1 = flatten_concat(pr1.second.get_right_side(), replace_map);
+
+            for(const auto& pr2 : this->formula.get_predicates()) {
+                if(!pr2.second.is_equation()) continue;
+                if(pr1 == pr2) continue;
+                if(pr1.second.get_left_side() != pr2.second.get_left_side()) continue;
+                
+
+                Concat c2 = flatten_concat(pr2.second.get_right_side(), replace_map);
+                // compute the common prefix
+                for(i = 0; i < std::min(c1.size(), c2.size()); i++) {
+                    if(c1[i] != c2[i]) break;
+                }
+                // i is the first mismatching index
+                if(c1.size() == i + 1) {
+                    Predicate new_pred = Predicate(PredicateType::Equation, { Concat{c1[i]}, Concat(c2.begin() + i, c2.end()) });
+                    this->formula.add_predicate(new_pred);
+                } else if (c2.size() == i + 1) {
+                    Predicate new_pred = Predicate(PredicateType::Equation, { Concat{c2[i]}, Concat(c1.begin() + i, c1.end()) });
+                    this->formula.add_predicate(new_pred);
+                }
+            }
+        }
+    }
+
+    /**
+     * @brief Construct replace map. Replace map contains all items of the form X -> {W1 W2, W3, ...} if 
+     * there are quations X = W1 W2, X = W3, ... 
+     * 
+     * @return TermReplaceMap Constructed replace map
+     */
+    TermReplaceMap FormulaPreprocessor::construct_replace_map() const {
+        TermReplaceMap replace_map {};
+        for(const auto& pr : this->formula.get_predicates()) {
+            if(!pr.second.is_equation()) continue;
+            if(pr.second.get_left_side().size() != 1) continue;
+
+            const BasicTerm &var = pr.second.get_left_side()[0];
+            replace_map[var].insert(pr.second.get_right_side());
+        }
+        return replace_map;
+    }
+
+    /**
+     * @brief Flatten the given concatenation @p con according to the replace map. In particular, 
+     * replace all variables in @p con with the corresponding item in @p replace_map. 
+     * Applicable only if there is exactly one corresponding guy in @p replace_map (i.e., does not work 
+     * recursively).
+     * 
+     * @param con Conjunction to be flattened.
+     * @param replace_map Replace map
+     * @return Concat Conjunction with subtituted terms.
+     */
+    Concat FormulaPreprocessor::flatten_concat(const Concat& con, TermReplaceMap& replace_map) const {
+        Concat ret {};
+        for(const BasicTerm& bt : con) {
+            if(replace_map[bt].size() == 1) {
+                const Concat& rpl = *replace_map[bt].begin();
+                ret.insert(ret.end(), rpl.begin(), rpl.end());
+            } else {
+                ret.push_back(bt);
+            }
+        }
+        return ret;
+    }
+
+    /**
      * @brief Underapproximates the languages. Replace co-finite languages with length constraints while 
      * setting their languages to \Sigma^*.
      */
     void FormulaPreprocessor::underapprox_languages() {
         for(const Predicate& pred : this->formula.get_predicates_set()) {
             for(const BasicTerm& var : pred.get_vars()) {
-                int ln = 0;
-                if(this->aut_ass.is_co_finite(var, ln) && ln >= 0) {
-                    LenNode right = LenNode(BasicTerm(BasicTermType::Length, std::to_string(ln)));
-                    LenNode left = LenNode(var);
-                    LenNode eq = LenNode(LenFormulaType::EQ, {left, right});
-                    this->add_to_len_formula(LenNode(LenFormulaType::NOT, {eq}));
+                if(this->aut_ass.is_co_finite(var)) {
+                    mata::nfa::Nfa aut_compl = this->aut_ass.complement_lang(var);
+                    LenNode lengths = AutAssignment::get_lengths(aut_compl, var);
+                    this->add_to_len_formula(LenNode(LenFormulaType::NOT, {lengths}));
                     this->aut_ass[var] = std::make_shared<mata::nfa::Nfa>(this->aut_ass.sigma_star_automaton());
                     this->len_variables.insert(var);
                 }
@@ -1223,12 +1427,7 @@ namespace smt::noodler {
                     continue;
                 }
                 if(pr.second.get_right_side().size() < 1 || (pr.second.get_right_side().size() == 1 && pr.second.get_right_side()[0].is_literal())) {
-                    auto alphabet =  this->aut_ass.get_alphabet(false);
-                    mata::OnTheFlyAlphabet mata_alphabet{};
-                    for (const auto& symbol : alphabet) {
-                        mata_alphabet.add_new_symbol(std::to_string(symbol), symbol);
-                    }
-                    this->aut_ass[var] = std::make_shared<mata::nfa::Nfa>(mata::nfa::intersection(*this->aut_ass.at(var), mata::nfa::complement(other, mata_alphabet)));
+                    this->aut_ass[var] = std::make_shared<mata::nfa::Nfa>(mata::nfa::intersection(*this->aut_ass.at(var), this->aut_ass.complement_aut(other)));
                     rem_ids.insert(pr.first);
                     continue;
                 }
@@ -1241,12 +1440,7 @@ namespace smt::noodler {
                     continue;
                 }
                 if(pr.second.get_left_side().size() < 1 || (pr.second.get_left_side().size() == 1 && pr.second.get_left_side()[0].is_literal())) {
-                    auto alphabet =  this->aut_ass.get_alphabet(false);
-                    mata::OnTheFlyAlphabet mata_alphabet{};
-                    for (const auto& symbol : alphabet) {
-                        mata_alphabet.add_new_symbol(std::to_string(symbol), symbol);
-                    }
-                    this->aut_ass[var] = std::make_shared<mata::nfa::Nfa>(mata::nfa::intersection(*this->aut_ass.at(var), mata::nfa::complement(other, mata_alphabet)));
+                    this->aut_ass[var] = std::make_shared<mata::nfa::Nfa>(mata::nfa::intersection(*this->aut_ass.at(var), this->aut_ass.complement_aut(other)));
                     rem_ids.insert(pr.first);
                     continue;
                 }
@@ -1259,14 +1453,46 @@ namespace smt::noodler {
     }
 
     /**
+     * @brief Heuristicaly check if @p con1 and @p con2 can be unified, meaning that if we replace 
+     * variables with their replacements, can we get that @p con1  == @p con2 ? 
+     * 
+     * @param con1 First conjunction
+     * @param con2 Second conjunction
+     * @return true -> they can be unified
+     */
+    bool FormulaPreprocessor::can_unify(const Concat& con1, const Concat& con2, const std::function<bool(const Concat&, const Concat&)> &check) const {
+        TermReplaceMap replace_map = construct_replace_map();
+
+        // TODO: make as a parameter (although not sure how to set it in an optimal way). Moreover this algorithm could be 
+        // rewrited using ideas of LL(1) parsing. Then this parameter becomes useless.
+        int max_unifs = 4;
+        Concat tmp1 = con1;
+        Concat tmp2 = con2;
+        for(int i = 0; i < max_unifs; i++) {
+            tmp2 = con2;
+            for(int j = 0; j < max_unifs; j++) {
+                if(check(tmp1, tmp2)) {
+                    return true;
+                }
+                tmp2 = flatten_concat(tmp2, replace_map);
+            }
+            tmp1 = flatten_concat(tmp1, replace_map);
+        }
+        return false;
+    }
+
+    /**
      * @brief Check if the instance is clearly unsatisfiable. It checks trivial (dis)equations
      * of the form x != x, ab = cd (x is term, a,b,c,d are constants).
      * 
      * @return True --> unsat for sure.
      */
-    bool FormulaPreprocessor::contains_unsat_eqs_or_diseqs() const {
-        for(const auto& pr : this->formula.get_predicates()) {
-            if(pr.second.is_inequation() && pr.second.get_left_side() == pr.second.get_right_side()) {
+    bool FormulaPreprocessor::contains_unsat_eqs_or_diseqs() {
+        auto check = [](const Concat& c1, const Concat& c2) -> bool {
+            return c1 == c2;
+        };
+        for(const auto& pr : this->formula.get_predicates()) {            
+            if(pr.second.is_inequation() && can_unify(pr.second.get_left_side(), pr.second.get_right_side(), check)) {
                 return true;
             }
             if(pr.second.is_equation() && pr.second.is_str_const()) {
@@ -1282,6 +1508,48 @@ namespace smt::noodler {
             }
         }
         return false;
+    }
+
+    /**
+     * @brief Check if we can unify @p left and @p right in the sense of contains 
+     * (check if @p right is sublist of @p left ). Unifies according to equations.
+     * 
+     * @param left First concatenation
+     * @param right Second concatenation
+     * @return true <-> can be sublist-unified 
+     */
+    bool FormulaPreprocessor::can_unify_contain(const Concat& left, const Concat& right) const {
+        auto check = [](const Concat& c1, const Concat& c2) -> bool {
+            for(auto it = c1.begin(); it != c1.end(); it++) {
+                if(std::equal(it, it+c2.size(), c2.begin(), c2.end())) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        return can_unify(left, right, check);
+    }
+
+
+    /**
+     * @brief Adds restrictions from conversions to the len_formula, so that (underapproximating) unsat check can be better
+     * 
+     * Specifically, it checks if for to_code(x)/to_int(x) there is any valid word in the language of automaton for x, i.e,
+     * some one-symbol word for to_code(x) or some word containing only digits for to_int(x).
+     * 
+     * @param conversions 
+     */
+    void FormulaPreprocessor::conversions_validity(std::vector<TermConversion>& conversions) {
+        mata::nfa::Nfa sigma_aut = aut_ass.sigma_automaton();
+        mata::nfa::Nfa only_digits_aut = AutAssignment::digit_automaton();
+
+        for (const auto& conv : conversions) {
+            if ((conv.type == ConversionType::TO_CODE && mata::nfa::reduce(mata::nfa::intersection(sigma_aut,       *aut_ass.at(conv.string_var))).is_lang_empty()) ||
+                (conv.type == ConversionType::TO_INT  && mata::nfa::reduce(mata::nfa::intersection(only_digits_aut, *aut_ass.at(conv.string_var))).is_lang_empty()))
+                {
+                    len_formula.succ.emplace_back(LenFormulaType::EQ, std::vector<LenNode>{conv.int_var, -1});
+                }
+        }
     }
 
 } // Namespace smt::noodler.
