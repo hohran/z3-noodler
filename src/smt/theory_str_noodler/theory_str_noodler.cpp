@@ -857,6 +857,12 @@ namespace smt::noodler {
             }
         }
 
+				std::cerr << "Formula:\n======\n";
+				for (const Predicate& pred : instance.get_predicates()) {
+					std::cerr << pred << std::endl;
+				}
+				std::cerr << "======\n";
+
         // try length-based decision procedure (if enabled) to solve
         if(m_params.m_try_length_proc && LengthDecisionProcedure::is_suitable(instance, aut_assignment)) {
 
