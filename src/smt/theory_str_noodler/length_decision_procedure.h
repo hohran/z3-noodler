@@ -26,6 +26,9 @@ namespace smt::noodler {
         AutAssignment init_aut_ass;
         const theory_str_noodler_params& m_params;
 
+
+        // the length formula from preprocessing, get_lengths should create conjunct with it
+        LenNode preprocessing_len_formula = LenNode(LenFormulaType::TRUE,{});
     public:
         
         /**

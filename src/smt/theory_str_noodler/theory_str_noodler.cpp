@@ -830,6 +830,12 @@ namespace smt::noodler {
             }
         }
 
+				std::cerr << "Formula:\n======\n";
+				for (const Predicate& pred : instance.get_predicates()) {
+					std::cerr << pred << std::endl;
+				}
+				std::cerr << "======\n";
+
         // try length-based decision procedure (if enabled) to solve
         if(m_params.m_try_length_proc && LengthDecisionProcedure::is_suitable(instance, aut_assignment)) {
             lbool result = run_length_proc(instance, aut_assignment, init_length_sensitive_vars);
@@ -842,6 +848,7 @@ namespace smt::noodler {
 
         // try underapproximation (if enabled) to solve
         if(m_params.m_underapproximation && is_underapprox_suitable(instance, aut_assignment)) {
+            std::cout << "HERE\n\n\n";
             STRACE("str", tout << "Try underapproximation" << std::endl);
             if (solve_underapprox(instance, aut_assignment, init_length_sensitive_vars, conversions) == l_true) {
                 STRACE("str", tout << "Sat from underapproximation" << std::endl;);
@@ -867,6 +874,7 @@ namespace smt::noodler {
             block_curr_len(lengths, true, true);
             return FC_CONTINUE;
         }
+    
 
         STRACE("str", tout << "Starting main decision procedure" << std::endl);
         dec_proc.init_computation();
