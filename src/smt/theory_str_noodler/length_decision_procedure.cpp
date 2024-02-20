@@ -18,150 +18,270 @@
 
 namespace smt::noodler {
 
-//////////////////////////////////
+    // TODO: this is nastyy
+    BasicTerm begin_of(zstring of, zstring from) {
+        return BasicTerm(BasicTermType::Variable, "BEGIN_OF_" + of.encode() + "_FROM_" + from.encode());
+    }
 
-typedef struct LiteralAggregate_t {
-    zstring parent_var;
-    zstring literal_name;
-} LiteralAggregate;
+    bool VarConstraint::check_side(const Concat& side) {
+        return side.size() == 1 && side[0].get_name() == _name;
+    }
 
-class VarConstraint
-{
-private:
-	zstring _name;
-	std::vector<Concat> _constr_eqs;	// All sides of equations on the opposite side of this variable
+    void VarConstraint::emplace(const Concat& c, std::map<zstring, zstring>& lit_conversion) {
+        Concat n {};
+        for (const BasicTerm& t : c) {
+            if (BasicTermType::Literal == t.get_type()) {
+                BasicTerm lit(BasicTermType::Literal, LengthDecisionProcedure::generate_lit_alias(t.get_name(), lit_conversion));
+                n.emplace_back(lit);
+            } else {
+                n.emplace_back(t);
+            }
+        }
 
-	std::vector<LiteralAggregate> _lits; // Literals occuring explicitly and in contained variables
+        _constr_eqs.emplace_back(n);
+    }
 
-	// std::map<zstring, zstring>& conv;
-public:
-	lbool is_parsed;
-	VarConstraint() : _name(), is_parsed (l_false) {};
-	VarConstraint(zstring name) : _name(std::move(name)), is_parsed (l_false) {};
-	bool check_side(const Concat& side) {
-		return side.size() == 1 && side[0].get_name() == _name;
-	}
-	bool add(const Predicate& pred) {
-		if (check_side(pred.get_left_side())) {
-			_constr_eqs.emplace_back(pred.get_right_side());
-			return true;
-		}
-		if (check_side(pred.get_right_side())) {
-			_constr_eqs.emplace_back(pred.get_left_side());
-			return true;
-		}
+    bool VarConstraint::add(const Predicate& pred, std::map<zstring, zstring>& lit_conversion) {
+        if (check_side(pred.get_left_side())) {
+            emplace(pred.get_right_side(), lit_conversion);
+            return true;
+        }
+        if (check_side(pred.get_right_side())) {
+            emplace(pred.get_left_side(), lit_conversion);
+            return true;
+        }
 
-		return false;
-	}
+        // Fresh variable 
+        emplace(pred.get_right_side(), lit_conversion);
+        emplace(pred.get_left_side(), lit_conversion);
 
-	// !!! Must be called after parse !!!
-	const std::vector<LiteralAggregate>& get_lits() const {
-		return _lits;
-	}
+        return false;
+    }
 
-	// TODO: already generate here
-	/**
-	 * @brief parse var constraint
-	 * 
-	 * @param pool all var constraints
-	 * @param conv conversions for literals
-	 * @return bool success
-	 */
-	bool parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,zstring>& conv) {
-		if (is_parsed == l_true) {
-			return true;	// Already parsed
-		}
+    const std::vector<zstring>& VarConstraint::get_lits() const {
+        return _lits;
+    }
 
-		if (is_parsed == l_undef) {
-			return false;	// Cycle
-		}
+    // LenNode align(const zstring& constr_var, const zstring& l1, const zstring& l2, std::map<zstring,zstring>& conv) {
+    //     zstring l1_val = conv[l1];
+    //     zstring l2_val = conv[l2];
 
-		is_parsed = l_undef;	// Currently in parsing
+        
+    // }
 
-		for (const Concat& side : _constr_eqs) {
-			for (const BasicTerm& t : side) {
-				if (t.get_type() == BasicTermType::Literal) {
-					zstring new_lit_name = util::mk_noodler_var_fresh("lit").get_name();
-					conv[new_lit_name] = t.get_name();
-					_lits.emplace_back(LiteralAggregate{.parent_var = "", .literal_name = new_lit_name});
-				} else if (t.get_type() == BasicTermType::Variable) {
+    void VarConstraint::get_alignments(const std::vector<zstring>& side_lits) {
+        for (const zstring& prev : this->_lits) {
+            for (const zstring& n : side_lits) {
+                std::cerr << "  psi(" << prev.encode() << ", " << n.encode() << ")\n";
+            }
+        }
+    }
 
-					// If the var is constrained
-					if (pool.count(t.get_name())) {
-						if (pool[t.get_name()].parse(pool, conv) == false) {
-							return false;	// There is a cycle: propagate
-						}
-						
-						for (const LiteralAggregate& l : pool[t.get_name()].get_lits()) {
-							_lits.emplace_back(LiteralAggregate{.parent_var = t.get_name(), .literal_name = l.literal_name});
-						}
-					}
-				}
-			}
-		}
+    void generate_begin_decl(const zstring& constr_var, const zstring& var, const BasicTerm& last, bool precise) {
+        LenNode end_of_last = (last.get_type() == BasicTermType::Length)
+            ? LenNode(0)
+            : LenNode(LenFormulaType::PLUS, {begin_of(last.get_name(), constr_var), last});
 
-		is_parsed = l_true;
-		return true;
-	}
+        LenNode out = precise ? LenNode(LenFormulaType::EQ, {begin_of(var, constr_var), end_of_last})
+            : LenNode(LenFormulaType::LEQ, {end_of_last, begin_of(var, constr_var)});
+        
+        std::cerr << out << std::endl;
+    }
 
-	std::string to_string() const {
-		std::string ret = "#####\n# VarConstraint: " + _name.encode() + "\n###\n#";
-		bool first = true;
-		for (const Concat& side : _constr_eqs) {
-			if (!first) {
-				ret += " =";
-			}
-			first = false;
+    void generate_begin_decl(const zstring& constr_var, const zstring& lit, const zstring& from) {
+        LenNode out (LenFormulaType::EQ, {begin_of(lit, constr_var), LenNode(LenFormulaType::PLUS, {begin_of(lit, from), begin_of(from, constr_var)})});
+        std::cerr << out << std::endl;
+    }
 
-			for (const BasicTerm& term : side) {
-				// Literals will be displayed just by their name, not by value
-				ret += " " + term.to_string();
-			}
-		}
+    void generate_end_decl(const zstring& constr_var, const zstring& var, bool precise) {
+        LenFormulaType ftype = precise ? LenFormulaType::EQ : LenFormulaType::LEQ;
+        LenNode out (ftype, {
+            LenNode(LenFormulaType::PLUS, {begin_of(var, constr_var), BasicTerm(BasicTermType::Variable, var)}),
+            BasicTerm(BasicTermType::Variable, constr_var)
+        });
+        std::cerr << out << std::endl;
+    }
 
-		ret += "\n###\n# lits:";
+    bool VarConstraint::parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,zstring>& conv) {
+        if (is_parsed == l_true) {
+            return true;	// Already parsed
+        }
 
-		for (const LiteralAggregate& t :_lits) {
-			// for explicit: ... lname ...
-			// for derived: ... lname (vname) ...
-			ret += " " + t.literal_name.encode() + ((t.parent_var == "") ? "" : ("("+t.parent_var.encode()+")"));
-		}
+        if (is_parsed == l_undef) {
+            return false;	// Cycle
+        }
 
-		ret += "\n#####\n";
-		return ret;
-	}
-};
+        is_parsed = l_undef;	// Currently in parsing
 
-static std::ostream& operator<<(std::ostream& os, const VarConstraint& vcon) {
-    os << vcon.to_string();
-    return os;
-}
+        // parse derived
+        for (const Concat& side : _constr_eqs) {
+            for (const BasicTerm& t : side) {
+                if (t.get_type() == BasicTermType::Variable) {
 
-void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) {
-	bool in_pool = false;
+                    // parse constrained variables
+                    if (pool.count(t.get_name())) {
+                        if (pool[t.get_name()].parse(pool, conv) == false) {
+                            return false;	// There is a cycle
+                        }
+                    }
+                }
+            }
+        }
 
-	for (const Concat& side : pred.get_params()) {
-		if (side.size() == 1 && side[0].get_type() == BasicTermType::Variable) {
-			zstring var_name = side[0].get_name();
-			if (pool.count(var_name) == 0) {
-				pool[var_name] = VarConstraint(var_name);
-				pool[var_name].add(pred);
-			} else {
-				pool[var_name].add(pred);
-			}
+        is_parsed = l_true;
 
-			in_pool = true;
-		}
-	}
+        std::cerr << "Processing " << this->_name << ":\n==========\n\n";
 
-	if (!in_pool) {
-		zstring fresh = util::mk_noodler_var_fresh("f").get_name();
-		pool[fresh] = VarConstraint(fresh);
-	}
-}
+        // lits alignment
+        std::cerr << "Alignment of literals:\n-----\n";
+        for (const Concat& side : _constr_eqs) {
+            std::vector<zstring> lits_in_side {};
+            for (const BasicTerm& t : side) {
+                if (t.get_type() == BasicTermType::Literal) {
+                    lits_in_side.emplace_back(t.get_name());
+                } else 
+                if (t.get_type() == BasicTermType::Variable) {
+
+                    // If the var is constrained
+                    if (pool.count(t.get_name())) {                        
+                        for (const zstring& l : pool[t.get_name()].get_lits()) {
+                            lits_in_side.emplace_back(l);
+                        }
+                    }
+                }
+            }
+
+            get_alignments(lits_in_side);
+            for (const zstring& z : lits_in_side) {
+                _lits.emplace_back(z);
+            }
+        }
+        std::cerr << "-----\n\n";
+
+        // kontys constraints e.g. x = uvw -> |x| = |u|+|v|+|w|
+        std::cerr << "kontys constraints:\n-----\n";
+        for (const Concat& side : _constr_eqs) {
+            bool unconstrained = true;    // there are unconstrained variables
+            std::vector<LenNode> side_len {};
+
+            for (const BasicTerm& t : side) {
+
+                // unconstrained variable
+                if (t.get_type() == BasicTermType::Variable && pool.count(t.get_name()) == 0) {
+                    unconstrained = false;
+                } else {
+                    side_len.emplace_back(t);
+                }
+            }
+            if (unconstrained) {}
+            LenNode out = unconstrained 
+                ? LenNode(LenFormulaType::EQ, {LenNode(BasicTerm(BasicTermType::Variable, this->_name)), LenNode(LenFormulaType::PLUS, side_len)})
+                : LenNode(LenFormulaType::NOT, {LenNode(LenFormulaType::LT, {LenNode(BasicTerm(BasicTermType::Variable, this->_name)), LenNode(LenFormulaType::PLUS, side_len)})});
+            std::cerr << out << std::endl;
+        }
+        std::cerr << "-----\n\n";
+
+        // begin constraints
+        std::cerr << "begin constraints:\n-----\n";
+        for (const Concat& side : _constr_eqs) {
+            BasicTerm last (BasicTermType::Length);
+            bool precise = true;    // there is no immediately previous filler variable
+
+            for (const BasicTerm& t : side) {
+                if (t.get_type() == BasicTermType::Literal) {
+                    generate_begin_decl(this->_name, t.get_name(), last, precise);
+                    last = t;
+                    precise = true;
+                } else {
+                    // Var is constrained
+                    if (pool.count(t.get_name())) {
+                        generate_begin_decl(this->_name, t.get_name(), last, precise);
+                        for (const zstring& lit : pool[t.get_name()].get_lits()) {
+                            generate_begin_decl(this->_name, lit, t.get_name());
+                        }
+                        last = t;
+                        precise = true;
+                    } else {
+                        precise = false;
+                    }
+                }
+            }
+
+            bool is_relevant = (last.get_type() == BasicTermType::Literal);
+            is_relevant |= (last.get_type() == BasicTermType::Variable && pool.count(last.get_name()));
+
+            if (is_relevant) {
+                generate_end_decl(this->_name, last.get_name(), precise);
+            }
+        }
+        std::cerr << "-----\n\n";
+
+        std::cerr << "=========\n\n";
+        return true;
+    }
+
+    std::string VarConstraint::to_string() const {
+        std::string ret = "#####\n# VarConstraint: " + _name.encode() + "\n###\n#";
+        bool first = true;
+        for (const Concat& side : _constr_eqs) {
+            if (!first) {
+                ret += " =";
+            }
+            first = false;
+
+            for (const BasicTerm& term : side) {
+                // Literals will be displayed just by their name, not by value
+                ret += " " + term.to_string();
+            }
+        }
+
+        ret += "\n###\n# lits:";
+
+        for (const zstring& t :_lits) {
+            // for explicit: ... lname ...
+            ret += " " + t.encode(); // + ((t.parent_var == "") ? "" : ("("+t.parent_var.encode()+")"));
+        }
+
+        ret += "\n#####\n";
+        return ret;
+    }
 
 
-///////////////////////////////////
+
+    static std::ostream& operator<<(std::ostream& os, const VarConstraint& vc) {
+        os << vc.to_string();
+        return os;
+    }
+
+    zstring LengthDecisionProcedure::generate_lit_alias(const zstring& value, std::map<zstring, zstring>& lit_conversion) {
+        zstring new_lit_name = util::mk_noodler_var_fresh("lit").get_name();
+        lit_conversion[new_lit_name] = value;
+        return new_lit_name;
+    }
+
+    void LengthDecisionProcedure::add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) {
+        bool in_pool = false;
+
+        for (const Concat& side : pred.get_params()) {
+            if (side.size() == 1 && side[0].get_type() == BasicTermType::Variable) {
+                zstring var_name = side[0].get_name();
+                if (pool.count(var_name) == 0) {
+                    pool[var_name] = VarConstraint(var_name);
+                }
+                pool[var_name].add(pred, lit_conversion);
+
+                in_pool = true;
+            }
+        }
+
+        if (!in_pool) {
+            zstring fresh = util::mk_noodler_var_fresh("f").get_name();
+            pool[fresh] = VarConstraint(fresh);
+        }
+    }
+
+
+    ///////////////////////////////////
 
     // TODO: this is nastyy
     BasicTerm begin_of(zstring of, zstring from) {
