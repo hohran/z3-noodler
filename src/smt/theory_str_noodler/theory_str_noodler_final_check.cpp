@@ -236,6 +236,24 @@ namespace smt::noodler {
         dec_proc.init_computation();
         while(dec_proc.compute_next_solution() == l_true) {
             expr_ref lengths = len_node_to_z3_formula(dec_proc.get_lengths().first);
+            
+            // std::cerr << "\n\nTEST LenNode:\n============\n";
+            // BasicTerm faklit(BasicTermType::Literal, "fake_lit");
+            // BasicTerm fakvar(BasicTermType::Variable, "fake_var");
+            // BasicTerm faklen(BasicTermType::Length, "fake_len");
+            // LenNode l1 = LenNode(faklen);
+            // LenNode l2 = LenNode(faklit);
+            // LenNode l3 = LenNode(fakvar);
+            
+            // std::cerr << "LenNode: " << l1 << "\nexpr_ref: " << len_node_to_z3_formula(l1) << std::endl;
+            // std::cerr << "LenNode: " << l2 << "\nexpr_ref: " << len_node_to_z3_formula(l2) << std::endl;
+            // std::cerr << "LenNode: " << l3 << "\nexpr_ref: " << len_node_to_z3_formula(l3) << std::endl;
+
+            // std::cerr << "\n============\n\n\n";
+
+            return l_undef;
+
+            std::cerr << "hehe: " << lengths << std::endl;
             if(check_len_sat(lengths) == l_true) {
                 return l_true;
             }
@@ -541,7 +559,7 @@ namespace smt::noodler {
         while (true) {
             lbool result = nproc.compute_next_solution();
             if (result == l_true) {
-                expr_ref lengths = len_node_to_z3_formula(nproc.get_lengths());
+                expr_ref lengths = len_node_to_z3_formula(nproc.get_lengths().first);
                 if (check_len_sat(lengths) == l_true) {
                     return l_true;
                 } else {
