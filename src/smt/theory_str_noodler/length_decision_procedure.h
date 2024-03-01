@@ -23,16 +23,24 @@ namespace smt::noodler {
 
         std::vector<zstring> _lits; // Literals occuring explicitly and in contained variables
 
+        std::vector<std::pair<zstring, zstring>> _alignments;   // All literals, that should be aligned
+
         // std::map<zstring, zstring>& conv;
         bool check_side(const Concat& side);
-        void emplace(const Concat& c, std::map<zstring, zstring>& lit_conversion);
+        void emplace(const Concat& c, std::map<zstring, BasicTerm>& lit_conversion);
 
-        void get_alignments(const std::vector<zstring>& side_lits);
+        LenNode generate_begin(const zstring& var_name, const BasicTerm& last, bool precise=true);
+        LenNode generate_begin(const zstring& lit, const zstring& from);
+        LenNode generate_end_var(const zstring& var, bool precise=true);
+
+        LenNode generate_kontys(const std::vector<LenNode>& side_len);
+
+        LenNode align_literals(const zstring& l1, const zstring& l2, const std::map<zstring, BasicTerm>& conv);
     public:
         lbool is_parsed;
         VarConstraint() : _name(), is_parsed (l_false) {};
         VarConstraint(zstring name) : _name(std::move(name)), is_parsed (l_false) {};
-        bool add(const Predicate& pred, std::map<zstring, zstring>& lit_conversion);
+        bool add(const Predicate& pred, std::map<zstring, BasicTerm>& lit_conversion);
         std::string to_string() const;
 
         // !!! Must be called after parse !!!
@@ -47,7 +55,9 @@ namespace smt::noodler {
          * @param conv conversions for literals
          * @return bool success
          */
-        bool parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,zstring>& conv);
+        bool parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv);
+
+        LenNode get_lengths(const std::map<zstring,VarConstraint>& pool, const std::map<zstring,BasicTerm>& conv);
 
         
     };
@@ -64,15 +74,17 @@ namespace smt::noodler {
         AutAssignment init_aut_ass;
         const theory_str_noodler_params& m_params;
 
-        std::map<zstring, zstring> lit_conversion {};	// Naming literals differently from their value
+        std::map<zstring, BasicTerm> lit_conversion {};	// Naming literals differently from their value
+
 
         // the length formula from preprocessing, get_lengths should create conjunct with it
         LenNode preprocessing_len_formula = LenNode(LenFormulaType::TRUE,{});
-        LenNode computed_len_formula = LenNode(LenFormulaType::TRUE,{});
+        std::vector<LenNode> computed_len_formula = {};
         std::vector<LenNode> implicit_len_formula = {};
 
     public:
-        static zstring generate_lit_alias(const zstring& value, std::map<zstring, zstring>& lit_conversion);
+        LenNodePrecision precision = LenNodePrecision::PRECISE; // could be private
+        static zstring generate_lit_alias(const BasicTerm& lit, std::map<zstring, BasicTerm>& lit_conversion);
         
         /**
          * Initialize a new decision procedure that can solve language (dis)equality constraints.

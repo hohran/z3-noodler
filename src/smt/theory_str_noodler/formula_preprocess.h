@@ -366,6 +366,10 @@ namespace smt::noodler {
         void remove_regular(const std::unordered_set<BasicTerm>& disallowed_vars);
         void propagate_variables();
         void propagate_eps();
+        // v-----
+        void separate_concat_eqs();
+        void replace_concatenations();
+        // ^-----
         void generate_identities();
         void reduce_regular_sequence(unsigned mn);
         void separate_eqs();
