@@ -237,23 +237,6 @@ namespace smt::noodler {
         while(dec_proc.compute_next_solution() == l_true) {
             expr_ref lengths = len_node_to_z3_formula(dec_proc.get_lengths().first);
             
-            // std::cerr << "\n\nTEST LenNode:\n============\n";
-            // BasicTerm faklit(BasicTermType::Literal, "fake_lit");
-            // BasicTerm fakvar(BasicTermType::Variable, "fake_var");
-            // BasicTerm faklen(BasicTermType::Length, "fake_len");
-            // LenNode l1 = LenNode(faklen);
-            // LenNode l2 = LenNode(faklit);
-            // LenNode l3 = LenNode(fakvar);
-            
-            // std::cerr << "LenNode: " << l1 << "\nexpr_ref: " << len_node_to_z3_formula(l1) << std::endl;
-            // std::cerr << "LenNode: " << l2 << "\nexpr_ref: " << len_node_to_z3_formula(l2) << std::endl;
-            // std::cerr << "LenNode: " << l3 << "\nexpr_ref: " << len_node_to_z3_formula(l3) << std::endl;
-
-            // std::cerr << "\n============\n\n\n";
-
-            return l_undef;
-
-            std::cerr << "hehe: " << lengths << std::endl;
             if(check_len_sat(lengths) == l_true) {
                 return l_true;
             }
@@ -564,7 +547,13 @@ namespace smt::noodler {
                     return l_true;
                 } else {
                     STRACE("str", tout << "length-based procedure len unsat" <<  mk_pp(lengths, m) << std::endl;);
-                    block_len = m.mk_or(block_len, lengths);
+                    if (nproc.precision != LenNodePrecision::UNDERAPPROX) {
+                        block_len = m.mk_or(block_len, lengths);
+                        block_curr_len(block_len);
+                        return l_false;
+                    } else {
+                        return l_undef;
+                    }
                 }
             } else if (result == l_false) {
                 // we did not find a solution (with satisfiable length constraints)

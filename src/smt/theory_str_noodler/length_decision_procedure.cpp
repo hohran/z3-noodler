@@ -27,11 +27,11 @@ namespace smt::noodler {
         return side.size() == 1 && side[0].get_name() == _name;
     }
 
-    void VarConstraint::emplace(const Concat& c, std::map<zstring, zstring>& lit_conversion) {
+    void VarConstraint::emplace(const Concat& c, std::map<zstring, BasicTerm>& lit_conversion) {
         Concat n {};
         for (const BasicTerm& t : c) {
             if (BasicTermType::Literal == t.get_type()) {
-                BasicTerm lit(BasicTermType::Literal, LengthDecisionProcedure::generate_lit_alias(t.get_name(), lit_conversion));
+                BasicTerm lit(BasicTermType::Literal, LengthDecisionProcedure::generate_lit_alias(t, lit_conversion));
                 n.emplace_back(lit);
             } else {
                 n.emplace_back(t);
@@ -41,7 +41,7 @@ namespace smt::noodler {
         _constr_eqs.emplace_back(n);
     }
 
-    bool VarConstraint::add(const Predicate& pred, std::map<zstring, zstring>& lit_conversion) {
+    bool VarConstraint::add(const Predicate& pred, std::map<zstring, BasicTerm>& lit_conversion) {
         if (check_side(pred.get_left_side())) {
             emplace(pred.get_right_side(), lit_conversion);
             return true;
@@ -62,47 +62,162 @@ namespace smt::noodler {
         return _lits;
     }
 
+    // TODO: rename
+    LenNode VarConstraint::generate_kontys(const std::vector<LenNode>& side_len) {
+        LenNode right = BasicTerm(BasicTermType::Variable, this->_name);
+        // if there is no variable: length is 0, for one variable the length of the left side is its length, for more the length is their sum
+        LenNode left = (side_len.size() == 0) ? LenNode(0)
+            : ((side_len.size() == 1) ? LenNode(side_len[0]) : LenNode(LenFormulaType::PLUS, side_len));
+        return LenNode(LenFormulaType::EQ, {right, left});
+    }
+
     // LenNode align(const zstring& constr_var, const zstring& l1, const zstring& l2, std::map<zstring,zstring>& conv) {
     //     zstring l1_val = conv[l1];
     //     zstring l2_val = conv[l2];
 
         
     // }
+    /**
+     * @brief Compare first n characters of l1 with last n characters of l2 (e.g. l1=banana, l2=ababa, n=2 -> [ba]nana, aba[ba] -> true)
+     * 
+     * @return bool match of substrings
+     */
+    bool zstr_comp(const zstring& l1_val, const zstring& l2_val, unsigned n) {
+        int s1 = 0;
+        int s2 = l2_val.length() - n;
 
-    void VarConstraint::get_alignments(const std::vector<zstring>& side_lits) {
-        for (const zstring& prev : this->_lits) {
-            for (const zstring& n : side_lits) {
-                std::cerr << "  psi(" << prev.encode() << ", " << n.encode() << ")\n";
+        if (s2 < 0) {
+            s1 -= s2;
+            n += s2;
+            s2 = 0;
+        }
+        if (s1 + n > l1_val.length()) {
+            n = l1_val.length() - s1;
+        }
+
+        for (unsigned i = 0; i < n; i++) {
+            if (l1_val[s1+i] != l2_val[s2+i]) {
+                return false;
             }
         }
+
+        return true;
     }
 
-    void generate_begin_decl(const zstring& constr_var, const zstring& var, const BasicTerm& last, bool precise) {
+    LenNode VarConstraint::align_literals(const zstring& l1, const zstring& l2, const std::map<zstring, BasicTerm>& conv) {
+        zstring l1_val = conv.at(l1).get_name();
+        zstring l2_val = conv.at(l2).get_name();
+
+        std::vector<unsigned> overlays{};
+
+        for (unsigned n = 1; n <= l2_val.length() + l1_val.length() - 1; n++) {
+            if (zstr_comp(l1_val, l2_val, n)) {
+                overlays.emplace_back(n);
+            }
+        }
+
+        LenNode before (LenFormulaType::LEQ, {LenNode(LenFormulaType::PLUS, {begin_of(l1, this->_name), rational(l1_val.length())}), begin_of(l2, this->_name)});
+        LenNode after (LenFormulaType::LEQ, {LenNode(LenFormulaType::PLUS, {begin_of(l2, this->_name), rational(l2_val.length())}), begin_of(l1, this->_name)});
+        std::vector<LenNode> align{before, after};
+        for (unsigned i : overlays) {
+            // b(l1) = b(l2) + |l2| - i
+            align.emplace_back(LenNode(LenFormulaType::EQ, {
+                LenNode(LenFormulaType::PLUS, {begin_of(l1, this->_name), rational(i)}),
+                LenNode(LenFormulaType::PLUS, {begin_of(l2, this->_name), rational(l2_val.length())})
+            }));
+        }
+
+        return LenNode(LenFormulaType::OR, align);
+    }
+
+    LenNode VarConstraint::get_lengths(const std::map<zstring,VarConstraint>& pool, const std::map<zstring,BasicTerm>& conv) {
+        std::vector<LenNode> form{};
+
+        // lits alignment
+        for (const auto& a : _alignments) {
+            form.emplace_back(align_literals(a.first, a.second, conv));
+        }
+
+        // kontys constraints e.g. x = uvw -> |x| = |u|+|v|+|w|
+        // TODO: only generate restrictrions for length sensitive variables
+        for (const Concat& side : _constr_eqs) {
+            // bool unconstrained = true;    // there are unconstrained variables
+            std::vector<LenNode> side_len {};
+
+            for (const BasicTerm& t : side) {
+                if (t.get_type() == BasicTermType::Literal) {
+                    side_len.emplace_back(conv.at(t.get_name()));
+                } else {
+                    side_len.emplace_back(t);
+                }
+            }
+
+            form.emplace_back(generate_kontys(side_len));
+        }
+
+        // begin constraints
+        for (const Concat& side : _constr_eqs) {
+            BasicTerm last (BasicTermType::Length);
+            // bool precise = true;    // there is no immediately previous filler variable
+
+            for (const BasicTerm& t : side) {
+                form.emplace_back(generate_begin(t.get_name(), last));
+                if (t.get_type() == BasicTermType::Variable && pool.count(t.get_name())) {
+                    for (const zstring& lit : pool.at(t.get_name()).get_lits()) {
+                        form.emplace_back(generate_begin(lit, t.get_name()));
+                    }
+                }
+                last = t;
+            }
+
+            // if (last.get_type() != BasicTermType::Length) {
+            //     // form.emplace_back(generate_end_var(last.get_name()));
+            //     // Watch out for approximation
+            // }
+
+            // With even the filler variables
+            
+        }
+
+        STRACE("str",
+            tout << "Length constraints on variable " << this->_name << "\n-----\n";
+            for (LenNode c : form) {
+                tout << c << std::endl;
+            }
+            tout << "-----\n\n";
+        );
+
+
+        return LenNode(LenFormulaType::AND, form);
+    }
+
+    LenNode VarConstraint::generate_begin(const zstring& var_name, const BasicTerm& last, bool precise) {
         LenNode end_of_last = (last.get_type() == BasicTermType::Length)
             ? LenNode(0)
-            : LenNode(LenFormulaType::PLUS, {begin_of(last.get_name(), constr_var), last});
+            : LenNode(LenFormulaType::PLUS, {begin_of(last.get_name(), this->_name), last});
 
-        LenNode out = precise ? LenNode(LenFormulaType::EQ, {begin_of(var, constr_var), end_of_last})
-            : LenNode(LenFormulaType::LEQ, {end_of_last, begin_of(var, constr_var)});
+        LenFormulaType ftype = precise ? LenFormulaType::EQ : LenFormulaType::LEQ;
+        LenNode out = LenNode(ftype, {end_of_last, begin_of(var_name, this->_name)});
         
-        std::cerr << out << std::endl;
+        return out;
     }
 
-    void generate_begin_decl(const zstring& constr_var, const zstring& lit, const zstring& from) {
-        LenNode out (LenFormulaType::EQ, {begin_of(lit, constr_var), LenNode(LenFormulaType::PLUS, {begin_of(lit, from), begin_of(from, constr_var)})});
-        std::cerr << out << std::endl;
+    LenNode VarConstraint::generate_begin(const zstring& lit, const zstring& from) {
+        LenNode out (LenFormulaType::EQ, {begin_of(lit, this->_name), LenNode(LenFormulaType::PLUS, {begin_of(lit, from), begin_of(from, this->_name)})});
+        return out;
     }
 
-    void generate_end_decl(const zstring& constr_var, const zstring& var, bool precise) {
+    LenNode VarConstraint::generate_end_var(const zstring& var_name, bool precise) {
+        // TODO: check
         LenFormulaType ftype = precise ? LenFormulaType::EQ : LenFormulaType::LEQ;
         LenNode out (ftype, {
-            LenNode(LenFormulaType::PLUS, {begin_of(var, constr_var), BasicTerm(BasicTermType::Variable, var)}),
-            BasicTerm(BasicTermType::Variable, constr_var)
+            LenNode(LenFormulaType::PLUS, {begin_of(var_name, this->_name), BasicTerm(BasicTermType::Variable, var_name)}),
+            BasicTerm(BasicTermType::Variable, this->_name)
         });
-        std::cerr << out << std::endl;
+        return out;
     }
 
-    bool VarConstraint::parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,zstring>& conv) {
+    bool VarConstraint::parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv) {
         if (is_parsed == l_true) {
             return true;	// Already parsed
         }
@@ -115,108 +230,39 @@ namespace smt::noodler {
 
         // parse derived
         for (const Concat& side : _constr_eqs) {
+            std::vector<zstring> lits_in_side {};
             for (const BasicTerm& t : side) {
+                if (t.get_type() == BasicTermType::Literal) {
+                    lits_in_side.emplace_back(t.get_name());
+                }
                 if (t.get_type() == BasicTermType::Variable) {
-
                     // parse constrained variables
                     if (pool.count(t.get_name())) {
                         if (pool[t.get_name()].parse(pool, conv) == false) {
                             return false;	// There is a cycle
                         }
+
+                        for (const zstring& lit : pool[t.get_name()].get_lits()) {
+                            lits_in_side.emplace_back(lit);
+                        }
                     }
                 }
+            }
+
+            for (const zstring& l1 : _lits) {
+                for (const zstring& l2 : lits_in_side) {
+                    _alignments.emplace_back(l1, l2);
+                }
+            }
+
+            for (const zstring& l : lits_in_side) {
+                _lits.emplace_back(l);
             }
         }
 
         is_parsed = l_true;
 
-        std::cerr << "Processing " << this->_name << ":\n==========\n\n";
-
-        // lits alignment
-        std::cerr << "Alignment of literals:\n-----\n";
-        for (const Concat& side : _constr_eqs) {
-            std::vector<zstring> lits_in_side {};
-            for (const BasicTerm& t : side) {
-                if (t.get_type() == BasicTermType::Literal) {
-                    lits_in_side.emplace_back(t.get_name());
-                } else 
-                if (t.get_type() == BasicTermType::Variable) {
-
-                    // If the var is constrained
-                    if (pool.count(t.get_name())) {                        
-                        for (const zstring& l : pool[t.get_name()].get_lits()) {
-                            lits_in_side.emplace_back(l);
-                        }
-                    }
-                }
-            }
-
-            get_alignments(lits_in_side);
-            for (const zstring& z : lits_in_side) {
-                _lits.emplace_back(z);
-            }
-        }
-        std::cerr << "-----\n\n";
-
-        // kontys constraints e.g. x = uvw -> |x| = |u|+|v|+|w|
-        std::cerr << "kontys constraints:\n-----\n";
-        for (const Concat& side : _constr_eqs) {
-            bool unconstrained = true;    // there are unconstrained variables
-            std::vector<LenNode> side_len {};
-
-            for (const BasicTerm& t : side) {
-
-                // unconstrained variable
-                if (t.get_type() == BasicTermType::Variable && pool.count(t.get_name()) == 0) {
-                    unconstrained = false;
-                } else {
-                    side_len.emplace_back(t);
-                }
-            }
-            if (unconstrained) {}
-            LenNode out = unconstrained 
-                ? LenNode(LenFormulaType::EQ, {LenNode(BasicTerm(BasicTermType::Variable, this->_name)), LenNode(LenFormulaType::PLUS, side_len)})
-                : LenNode(LenFormulaType::NOT, {LenNode(LenFormulaType::LT, {LenNode(BasicTerm(BasicTermType::Variable, this->_name)), LenNode(LenFormulaType::PLUS, side_len)})});
-            std::cerr << out << std::endl;
-        }
-        std::cerr << "-----\n\n";
-
-        // begin constraints
-        std::cerr << "begin constraints:\n-----\n";
-        for (const Concat& side : _constr_eqs) {
-            BasicTerm last (BasicTermType::Length);
-            bool precise = true;    // there is no immediately previous filler variable
-
-            for (const BasicTerm& t : side) {
-                if (t.get_type() == BasicTermType::Literal) {
-                    generate_begin_decl(this->_name, t.get_name(), last, precise);
-                    last = t;
-                    precise = true;
-                } else {
-                    // Var is constrained
-                    if (pool.count(t.get_name())) {
-                        generate_begin_decl(this->_name, t.get_name(), last, precise);
-                        for (const zstring& lit : pool[t.get_name()].get_lits()) {
-                            generate_begin_decl(this->_name, lit, t.get_name());
-                        }
-                        last = t;
-                        precise = true;
-                    } else {
-                        precise = false;
-                    }
-                }
-            }
-
-            bool is_relevant = (last.get_type() == BasicTermType::Literal);
-            is_relevant |= (last.get_type() == BasicTermType::Variable && pool.count(last.get_name()));
-
-            if (is_relevant) {
-                generate_end_decl(this->_name, last.get_name(), precise);
-            }
-        }
-        std::cerr << "-----\n\n";
-
-        std::cerr << "=========\n\n";
+        
         return true;
     }
 
@@ -253,9 +299,10 @@ namespace smt::noodler {
         return os;
     }
 
-    zstring LengthDecisionProcedure::generate_lit_alias(const zstring& value, std::map<zstring, zstring>& lit_conversion) {
+    zstring LengthDecisionProcedure::generate_lit_alias(const BasicTerm& lit, std::map<zstring, BasicTerm>& lit_conversion) {
         zstring new_lit_name = util::mk_noodler_var_fresh("lit").get_name();
-        lit_conversion[new_lit_name] = value;
+        // lit_conversion[new_lit_name] = lit;
+        lit_conversion.emplace(std::make_pair(new_lit_name, lit));
         return new_lit_name;
     }
 
@@ -284,18 +331,17 @@ namespace smt::noodler {
     ///////////////////////////////////
 
     lbool LengthDecisionProcedure::compute_next_solution() {
-        std::cerr << "len: compute_next_solution\n===========\n";
-        for (const Predicate& pred : this->formula.get_predicates()) {
-            std::cerr << pred << std::endl;
-        }
+        // TODO: add underapprox for multiconcat on vars from different parent vars
 
         // Check for suitability
         std::vector<zstring> concat_vars = {};	// variables that have appeared in concatenation 
         
+        // TODO: compact to a function
         for (const Predicate& pred : this->formula.get_predicates()) {
+
             if (pred.get_type() == PredicateType::NotContains) {
-                // TODO: try to resolve not contains
-                std::cerr << "len: Cant solve not contains.\n";
+                // TODO: maybe try to resolve not contains
+                STRACE("str", tout << "len: Cant solve not contains.\n"; );
                 return l_undef;
             }
 
@@ -317,7 +363,8 @@ namespace smt::noodler {
                             // Check if variable was in any concatenation
                             for (zstring n : concat_vars) {
                                 if (n == var_name) {
-                                    return l_undef;
+                                    STRACE("str", tout << "multicontat on " << n << std::endl; );
+                                    // return l_undef;
                                 }
                             }
                             
@@ -327,11 +374,12 @@ namespace smt::noodler {
                         continue;
                     }
 
-                    std::cerr << "len: Not suitable.\n";
+                    STRACE("str", tout << "len: Not suitable because of " << var << std::endl; );
                     return l_undef;
                 }
             }
         }
+        return l_undef;
         // End check for suitability
 
         std::map<zstring, VarConstraint> pool{};
@@ -347,28 +395,30 @@ namespace smt::noodler {
             }
         }
 
+        // Change if there is filler var filter
+        for (const BasicTerm& v : this->formula.get_vars()) {
+            implicit_len_formula.emplace_back(LenNode(LenFormulaType::LEQ, {0, v}));
+        }
+
         for (std::pair<zstring, VarConstraint> it : pool) {
-            std::cerr << it.second << std::endl;
+            computed_len_formula.emplace_back(pool[it.first].get_lengths(pool, lit_conversion));
         }
 
-        std::cerr << "\n\nConversions:\n+--------\n";
-        for (const std::pair<const zstring, zstring>& conv : lit_conversion) {
-            std::cerr << "| " + conv.first.encode() + " : \"" + conv.second.encode() << "\"\n";
-        }
-
-        return l_undef;
+        return l_true;
     }
 
     std::pair<LenNode, LenNodePrecision> LengthDecisionProcedure::get_lengths() {
         // TODO if we choose to support multiconcatenations, we will need to add underapprox flag
-        LenNodePrecision precision = LenNodePrecision::PRECISE;
-        LenNode len_formula = LenNode(LenFormulaType::AND, {this->computed_len_formula, this->preprocessing_len_formula, LenNode(LenFormulaType::AND, this->implicit_len_formula)});
+        LenNode len_formula = LenNode(LenFormulaType::AND, {
+            this->preprocessing_len_formula, 
+            LenNode(LenFormulaType::AND, this->implicit_len_formula), 
+            LenNode(LenFormulaType::AND, this->computed_len_formula)
+        });
 
-        return {len_formula, precision};    
+        return {len_formula, this->precision};    
     }
 
     void LengthDecisionProcedure::init_computation() {
-        std::cout << "here.\n";
         STRACE("str", tout << "len: Initializing computation..." << std::endl);
     }
 
@@ -378,61 +428,62 @@ namespace smt::noodler {
 
         STRACE("str", tout << "len: Preprocessing..." << std::endl);
 
-        // std::ofstream out("len_dec_proc.txt");
-
-        // out << "preprocess\n===========\n";
-        // out << "Predicates:\n";
-        // for (const Predicate& p : this->formula.get_predicates()) {
-        //     out << p << '\n';
-        // }
-
-        // out << "\npreprocessing...\n\n";
 
         prep_handler.reduce_diseqalities();
-        // out << "Reduce disequalities:\n-------\n";
-        // for (const auto& p : prep_handler.get_formula().get_predicates()) {
-        //     out << "  " << p.second << '\n';
-        // }
-        // out << "-------\n\n";
+        STRACE("str", tout << "Reduce disequalities\n";);
 
-        prep_handler.underapprox_languages();
+        for (const Predicate& pred : this->formula.get_predicates()) {
+            if (pred.get_type() == PredicateType::Inequation) {
+                prep_handler.underapprox_languages();
+                this->precision = LenNodePrecision::UNDERAPPROX;
+                STRACE("str", tout << "UNDERAPPROXIMATE languages\n";);
+            }
+        }
 
         prep_handler.propagate_eps();
-        // out << "Propagate epsilon:\n-------\n";
-        // for (const auto& p : prep_handler.get_formula().get_predicates()) {
-        //     out << "  " << p.second << '\n';
-        // }
-        // out << "-------\n\n";
+        STRACE("str", tout << "Propagate epsilon\n";);
 
         prep_handler.propagate_variables();
-        // out << "Propagate variables:\n-------\n";
-        // for (const auto& p : prep_handler.get_formula().get_predicates()) {
-        //     out << "  " << p.second << '\n';
-        // }
-        // out << "-------\n\n";
+        STRACE("str", tout << "Propagate variables\n";);
 
         prep_handler.generate_identities();
-        // out << "Generate identities:\n-------\n";
-        // for (const auto& p : prep_handler.get_formula().get_predicates()) {
-        //     out << "  " << p.second << '\n';
-        // }
-        // out << "-------\n\n";
+        STRACE("str",
+            tout << "Generate identities:\n-------\n";
+            for (const auto& p : prep_handler.get_formula().get_predicates()) {
+                tout << "  " << p.second << '\n';
+            }
+            tout << "-------\n\n";
+        );
 
         prep_handler.propagate_variables();
-        // out << "Propagate variables:\n-------\n";
-        // for (const auto& p : prep_handler.get_formula().get_predicates()) {
-        //     out << "  " << p.second << '\n';
-        // }
-        // out << "-------\n\n";
+        STRACE("str",
+            tout << "Propagate variables:\n-------\n";
+            for (const auto& p : prep_handler.get_formula().get_predicates()) {
+                tout << "  " << p.second << '\n';
+            }
+            tout << "-------\n\n";
+        );
 
+        prep_handler.reduce_regular_sequence(2);
+        STRACE("str",
+            tout << "Reduce regular sequence:\n-------\n";
+            for (const auto& p : prep_handler.get_formula().get_predicates()) {
+                tout << "  " << p.second << '\n';
+            }
+            tout << "-------\n\n";
+        );
 
-        // prep_handler = FormulaPreprocessor(this->formula, this->init_aut_ass, this->init_length_sensitive_vars, m_params);
-
-        prep_handler.remove_trivial();
+        prep_handler.propagate_variables();
+        STRACE("str",
+            tout << "Propagate variables:\n-------\n";
+            for (const auto& p : prep_handler.get_formula().get_predicates()) {
+                tout << "  " << p.second << '\n';
+            }
+            tout << "-------\n\n";
+        );
         
-
-        // out.close();
-
+        prep_handler.remove_trivial();
+        STRACE("str", tout << "Remove trivial\n";);
         
         // Refresh the instance
         this->formula = prep_handler.get_modified_formula();
@@ -460,8 +511,6 @@ namespace smt::noodler {
             return l_true;
         }
 
-        
-        
         return l_undef;
     }
 
@@ -470,8 +519,8 @@ namespace smt::noodler {
         for (const Predicate& pred : form.get_predicates()) {
             if (pred.get_type() == PredicateType::NotContains) {
                 // TODO: try to resolve not contains
-                std::cerr << "len: Cant solve not contains.\n";
-                return l_undef;
+                STRACE("str", tout << "Cannot solve not contains.\n");
+                return false;
             }
 
             for (const Concat& side : pred.get_params()) {
@@ -488,35 +537,12 @@ namespace smt::noodler {
                         continue;
                     }
 
-                    /* move this after preprocessing
-                    // Variable is not literal
-                    if(init_aut_ass.at(var)->num_of_states() <= 1 || init_aut_ass.is_co_finite(var, len)) {
-                        if (is_concat) {
-                            zstring var_name = var.get_name();  // Name of the variable
-
-                            // Check if variable was in any concatenation
-                            for (zstring n : concat_vars) {
-                                if (n == var_name) {
-                                    std::cerr << "Not suitable 1.\n";
-                                    std::cerr << var_name << std::endl;
-                                    std::cerr << "===========" << std::endl;
-                                    return false;
-                                }
-                            }
-                            
-                            // Note it as a concatenation variable
-                            concat_vars.emplace_back(var_name);
-                        }
-                        continue;
-                    }
-                    */
-
-                    std::cerr << "len: Not suitable.\n";
+                    STRACE("str", tout << "Not suitable.\n");
                     return false;
                 }
             }
         }
-        std::cerr << "len: Suitable.\n";
+        STRACE("str", tout << "Suitable.\n"; );
         return true;
     }
 
