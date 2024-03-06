@@ -535,6 +535,7 @@ namespace smt::noodler {
 
     lbool theory_str_noodler::run_length_proc(const Formula& instance, const AutAssignment& aut_assignment, const std::unordered_set<BasicTerm>& init_length_sensitive_vars) {
         STRACE("str", tout << "Trying length-based procedure" << std::endl);
+
         LengthDecisionProcedure nproc(instance, aut_assignment, init_length_sensitive_vars, m_params);
         nproc.preprocess();
         expr_ref block_len(m.mk_false(), m);
@@ -556,6 +557,7 @@ namespace smt::noodler {
                     }
                 }
             } else if (result == l_false) {
+
                 // we did not find a solution (with satisfiable length constraints)
                 // we need to block current assignment
                 block_curr_len(block_len);
