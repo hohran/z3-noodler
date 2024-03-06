@@ -1222,7 +1222,6 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
                 }
             }
         }
-        return l_undef;
         // End check for suitability
 
         STRACE("str", tout << "Proceeding to computing length constraints.\n"; );
