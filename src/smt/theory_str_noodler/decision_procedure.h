@@ -13,9 +13,6 @@
 #include "formula_preprocess.h"
 
 
-#define LEN_DEBUG true
-
-
 namespace smt::noodler {
 
     /**

@@ -717,6 +717,8 @@ namespace smt::noodler {
     lbool LengthDecisionProcedure::compute_next_solution() {
         // TODO: add underapprox for multiconcat on vars from different parent vars
 
+        STRACE("str", tout << "len: compute_compute_next_solution...\n"; );
+
         // Check for suitability
         std::vector<zstring> concat_vars = {};	// variables that have appeared in concatenation 
         
@@ -763,18 +765,28 @@ namespace smt::noodler {
                 }
             }
         }
-        return l_undef;
         // End check for suitability
+
+        STRACE("str", tout << "Proceeding to computing length constraints.\n"; );
 
         std::map<zstring, VarConstraint> pool{};
 
         for (const Predicate& pred : this->formula.get_predicates()) {
             add_to_pool(pool, pred);
-        }        
+        }   
+
+        STRACE("str",
+            tout << "Conversions:\n-----\n";
+            for (auto c : lit_conversion) {
+                tout << c.first << " : " << c.second << std::endl;
+            }
+            tout << "-----\n";
+        );  
 
         for (std::pair<zstring, VarConstraint> it : pool) {
             if (pool[it.first].parse(pool, lit_conversion) == false) {
                 // There is a cycle
+                STRACE("str", tout << "len: Cyclic dependecy.\n";);
                 return l_undef;	// We cannot solve this formula
             }
         }
@@ -788,11 +800,13 @@ namespace smt::noodler {
             computed_len_formula.emplace_back(pool[it.first].get_lengths(pool, lit_conversion));
         }
 
+        STRACE("str", tout << "len: Finished computing.\n");
         return l_true;
     }
 
     std::pair<LenNode, LenNodePrecision> LengthDecisionProcedure::get_lengths() {
         // TODO if we choose to support multiconcatenations, we will need to add underapprox flag
+        STRACE("str", tout << "len: get_lengths:\n"; );
         LenNode len_formula = LenNode(LenFormulaType::AND, {
             this->preprocessing_len_formula, 
             LenNode(LenFormulaType::AND, this->implicit_len_formula), 
