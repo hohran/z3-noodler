@@ -461,41 +461,11 @@ namespace smt::noodler {
         STRACE("str", tout << "Propagate variables\n";);
 
         prep_handler.generate_identities();
-        STRACE("str",
-            tout << "Generate identities:\n-------\n";
-            for (const auto& p : prep_handler.get_formula().get_predicates()) {
-                tout << "  " << p.second << '\n';
-            }
-            tout << "-------\n\n";
-        );
+        STRACE("str", tout << "Generate identities:\n"; );
 
         prep_handler.propagate_variables();
-        STRACE("str",
-            tout << "Propagate variables:\n-------\n";
-            for (const auto& p : prep_handler.get_formula().get_predicates()) {
-                tout << "  " << p.second << '\n';
-            }
-            tout << "-------\n\n";
-        );
+        STRACE("str", tout << "Propagate variables\n";);
 
-        prep_handler.reduce_regular_sequence(2);
-        STRACE("str",
-            tout << "Reduce regular sequence:\n-------\n";
-            for (const auto& p : prep_handler.get_formula().get_predicates()) {
-                tout << "  " << p.second << '\n';
-            }
-            tout << "-------\n\n";
-        );
-
-        prep_handler.propagate_variables();
-        STRACE("str",
-            tout << "Propagate variables:\n-------\n";
-            for (const auto& p : prep_handler.get_formula().get_predicates()) {
-                tout << "  " << p.second << '\n';
-            }
-            tout << "-------\n\n";
-        );
-        
         prep_handler.remove_trivial();
         STRACE("str", tout << "Remove trivial\n";);
         
