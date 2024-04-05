@@ -779,6 +779,8 @@ namespace smt::noodler {
         bool contains_word_disequations = !this->m_word_diseq_todo_rel.empty();
         bool contains_conversions = !this->m_conversion_todo.empty();
 
+        bool contains_equations_only = this->m_membership_todo_rel.empty() && this->m_lang_eq_or_diseq_todo_rel.empty() && this->m_not_contains_todo_rel.empty() && this->m_conversion_todo.empty();
+
         // Solve Language (dis)equations
         if (!solve_lang_eqs_diseqs()) {
             // one of the (dis)equations is unsat
@@ -858,7 +860,7 @@ namespace smt::noodler {
         }
 
         // try length-based decision procedure (if enabled) to solve
-        if(m_params.m_try_length_proc && LengthDecisionProcedure::is_suitable(instance, aut_assignment)) {
+        if(m_params.m_try_length_proc && LengthDecisionProcedure::is_suitable(instance, aut_assignment) && contains_equations_only) {
             lbool result = run_length_proc(instance, aut_assignment, init_length_sensitive_vars);
             if(result == l_true) {
                 STRACE("str", tout << "Sat from length procedure.\n"; );
