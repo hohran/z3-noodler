@@ -1346,13 +1346,13 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
 
     bool LengthDecisionProcedure::is_suitable(const Formula &form, const AutAssignment& init_aut_ass) {
         // std::vector<zstring> concat_vars = {};	// variables that have appeared in concatenation 
+        STRACE("str", tout << "num of preds: " << form.get_predicates().size() << std::endl;);
         for (const Predicate& pred : form.get_predicates()) {
-            if (pred.get_type() == PredicateType::NotContains) {
-                // TODO: try to resolve not contains
-                STRACE("str", tout << "Cannot solve not contains.\n");
+            if(!pred.is_eq_or_ineq()) {
+                STRACE("str", tout << "Can only solve word (dis)equations.\n");
                 return false;
             }
-
+            
             for (const Concat& side : pred.get_params()) {
                 bool is_concat = side.size() > 1;
 
