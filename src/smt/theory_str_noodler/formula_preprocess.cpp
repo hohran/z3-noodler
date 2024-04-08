@@ -422,53 +422,6 @@ namespace smt::noodler {
     }
 
     /**
-     * @brief Replace all concatenations included in a variable with given variable:
-     * for X = U V W
-     * reduce Y = A U V W B
-     * to Y = A X B
-     */
-    void FormulaPreprocessor::replace_concatenations() {
-        std::map<size_t, smt::noodler::Predicate> regs = this->formula.get_predicates();
-        std::deque<size_t> worklist;
-
-        std::transform(regs.begin(), regs.end(), std::back_inserter(worklist),
-            [](auto const& pair){ return pair.first; });
-
-        // std::map<zstring, int>
-
-        while(!worklist.empty()) {
-            size_t index = worklist.front();
-            worklist.pop_front();
-            if(this->formula.get_predicates().find(index) == this->formula.get_predicates().end()) {
-                continue;
-            }
-            Predicate eq = this->formula.get_predicate(index);
-            if(eq.get_left_side() == eq.get_right_side()) {
-                this->formula.remove_predicate(index);
-                continue;
-            }
-
-            if(!eq.get_left_side()[0].is_variable()) {
-                eq = eq.get_switched_sides_predicate();
-            }
-            if(!eq.get_left_side()[0].is_variable()) {
-                continue;
-            }
-            // only work with concatenations (maybe irrelevant)
-            if (eq.get_right_side().size() <= 1) {
-                continue;
-            }
-            // now in form: X = Y, with X being variable and Y concatenation
-
-            STRACE("str", tout << "Replace concatenations from " << eq << std::endl);
-
-            this->formula.remove_predicate(index);
-            this->formula.replace(eq.get_right_side(), eq.get_left_side());
-            this->formula.add_predicate(eq, index);
-        }
-    }
-
-    /**
      * @brief Get symmetrical difference of occurrences of BasicTerms within two concatenations. For instance for X.Y.X and X.Y.W.Z
      * it returns ({{X,3}}, {{W,3}, {Z,4}}). It includes both variables and literals.
      *
@@ -599,6 +552,20 @@ namespace smt::noodler {
     }
 
     /**
+     * @brief Replace variable X with language with single state with its literal value. 
+     * E.g., x \in "abc" ... xy = wz -> "abc"y = wz
+     * 
+     */
+    void FormulaPreprocessor::replace_vars_with_lits() {
+        for (const auto& t : this->formula.get_varmap()) {
+            BasicTerm term = t.first;
+            if (term.is_variable() && this->aut_ass.is_singleton(term)) {
+                // aut_ass[term]
+            }
+        }
+    }
+
+    /**
      * @brief Create concatenation graph. Oriented graph where each term is node and two terms
      * (variable/litaral) t1 and t2 are connected (t1 -> t2) if t1.t2 occurs in some equation.
      * Moreover each edge is labelled by number of occurrences of such concatenation in the formula.
@@ -704,44 +671,6 @@ namespace smt::noodler {
         for(const Predicate& eq : new_eqs) {
             this->formula.add_predicate(eq);
             // We do not add dependency
-        }
-    }
-
-    /**
-     * @brief Separate predicates with more than one variable on each side into two equations, e.g:
-     * U V W = X Y Z
-     * is transformed into:
-     * F = U V W
-     * F = X Y Z
-     * where F is a fresh variable
-     */
-    void FormulaPreprocessor::separate_concat_eqs() {
-        std::map<size_t, Predicate> regs = this->formula.get_predicates();
-        std::deque<size_t> worklist;
-
-        std::transform(regs.begin(), regs.end(), std::back_inserter(worklist),
-            [](auto const& pair){ return pair.first; });
-
-        while (!worklist.empty()) {
-            size_t index = worklist.front();
-            worklist.pop_front();
-            if(this->formula.get_predicates().find(index) == this->formula.get_predicates().end()) {
-                continue;
-            }
-            Predicate eq = this->formula.get_predicate(index);
-            if (eq.get_left_side().size() <= 1) {
-                continue;
-            }
-            if (eq.get_right_side().size() <= 1) {
-                continue;
-            }
-
-            BasicTerm fresh_var = util::mk_noodler_var_fresh("f");
-            update_reg_constr(fresh_var, eq.get_left_side());
-            update_reg_constr(fresh_var, eq.get_right_side());
-            this->formula.add_predicate(Predicate(PredicateType::Equation, {Concat({fresh_var}), eq.get_left_side()}));
-            this->formula.add_predicate(Predicate(PredicateType::Equation, {Concat({fresh_var}), eq.get_right_side()}));
-            this->formula.remove_predicate(index);
         }
     }
 

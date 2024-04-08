@@ -366,10 +366,6 @@ namespace smt::noodler {
         void remove_regular(const std::unordered_set<BasicTerm>& disallowed_vars);
         void propagate_variables();
         void propagate_eps();
-        // v-----
-        void separate_concat_eqs();
-        void replace_concatenations();
-        // ^-----
         void generate_identities();
         void reduce_regular_sequence(unsigned mn);
         void separate_eqs();
@@ -389,6 +385,8 @@ namespace smt::noodler {
         bool can_unify_contain(const Concat& left, const Concat& right) const;
 
         void conversions_validity(std::vector<TermConversion>& conversions);
+
+        void replace_vars_with_lits();
 
         /**
          * @brief Replace all occurrences of find with replace. Warning: do not modify the automata assignment.
