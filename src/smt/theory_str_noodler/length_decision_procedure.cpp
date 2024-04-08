@@ -1186,6 +1186,14 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
 
         STRACE("str", tout << "len: compute_compute_next_solution...\n"; );
 
+        STRACE("str",
+            tout << "formula after preprocess:\n";
+            for (const Predicate& pred : this->formula.get_predicates()) {
+                tout << pred << std::endl;
+            }
+            tout << std::endl;
+        );
+
         // Check for suitability
         std::vector<BasicTerm> concat_vars = {};	// variables that have appeared in concatenation 
         
@@ -1203,6 +1211,7 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
 
                     if (std::find(concat_vars.begin(), concat_vars.end(), t) == concat_vars.end()) {
                         concat_vars.emplace_back(t);
+                        continue;
                     } else {
                         STRACE("str", tout << "multiconcat on " << t.to_string() << std::endl; );
                         return l_undef;
@@ -1281,11 +1290,6 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
 
     void LengthDecisionProcedure::init_computation() {
         STRACE("str", tout << "len: Initializing computation..." << std::endl);
-
-        zstring l1 = "aba";
-        zstring l2 = "bab";
-
-        // std::map<zstring, BasicTerm>conv {{l1, BasicTerm}}
     }
 
     lbool LengthDecisionProcedure::preprocess(PreprocessType opt, const BasicTermEqiv &len_eq_vars) {
@@ -1318,6 +1322,8 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
 
         prep_handler.remove_trivial();
         STRACE("str", tout << "Remove trivial\n";);
+
+        prep_handler.propagate_variables();
         
         // Refresh the instance
         this->formula = prep_handler.get_modified_formula();
