@@ -345,6 +345,14 @@ namespace smt::noodler {
 
         STRACE("str", tout << "len: compute_compute_next_solution...\n"; );
 
+        STRACE("str",
+            tout << "formula after preprocess:\n";
+            for (const Predicate& pred : this->formula.get_predicates()) {
+                tout << pred << std::endl;
+            }
+            tout << std::endl;
+        );
+
         // Check for suitability
         std::vector<BasicTerm> concat_vars = {};	// variables that have appeared in concatenation 
         
@@ -362,6 +370,7 @@ namespace smt::noodler {
 
                     if (std::find(concat_vars.begin(), concat_vars.end(), t) == concat_vars.end()) {
                         concat_vars.emplace_back(t);
+                        continue;
                     } else {
                         STRACE("str", tout << "multiconcat on " << t.to_string() << std::endl; );
                         return l_undef;
@@ -435,11 +444,6 @@ namespace smt::noodler {
 
     void LengthDecisionProcedure::init_computation() {
         STRACE("str", tout << "len: Initializing computation..." << std::endl);
-
-        zstring l1 = "aba";
-        zstring l2 = "bab";
-
-        // std::map<zstring, BasicTerm>conv {{l1, BasicTerm}}
     }
 
     lbool LengthDecisionProcedure::preprocess(PreprocessType opt, const BasicTermEqiv &len_eq_vars) {
@@ -472,6 +476,8 @@ namespace smt::noodler {
 
         prep_handler.remove_trivial();
         STRACE("str", tout << "Remove trivial\n";);
+
+        prep_handler.propagate_variables();
         
         // Refresh the instance
         this->formula = prep_handler.get_modified_formula();
