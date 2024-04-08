@@ -253,9 +253,19 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
         zstring l1_val = conv.at(l1).get_name();
         zstring l2_val = conv.at(l2).get_name();
 
+        if (l1_val.length() == 1) {
+            if (l2_val.length() == 1) {
+                if (l1_val[0] == l2_val[0]) {
+                    return LenNode(LenFormulaType::TRUE, {});
+                } else {
+                    return LenNode(LenFormulaType::NOT, {LenNode(LenFormulaType::EQ, {begin_of(l1, this->_name), begin_of(l2, this->_name)})});
+                }
+            }
+        }
+
         std::vector<unsigned> overlays{};
 
-        for (unsigned n = 1; n <= l2_val.length() + l1_val.length() - 1; n++) {
+        for (unsigned n = 1; n <= l2_val.length() + l1_val.length() - 1; ++n) {
             if (zstr_comp(l1_val, l2_val, n)) {
                 overlays.emplace_back(n);
             }
@@ -1177,47 +1187,28 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
         STRACE("str", tout << "len: compute_compute_next_solution...\n"; );
 
         // Check for suitability
-        std::vector<zstring> concat_vars = {};	// variables that have appeared in concatenation 
+        std::vector<BasicTerm> concat_vars = {};	// variables that have appeared in concatenation 
         
         // TODO: compact to a function
         for (const Predicate& pred : this->formula.get_predicates()) {
-
-            if (pred.get_type() == PredicateType::NotContains) {
-                // TODO: maybe try to resolve not contains
-                STRACE("str", tout << "len: Cant solve not contains.\n"; );
-                return l_undef;
-            }
-
             for (const Concat& side : pred.get_params()) {
-                bool is_concat = side.size() > 1;
+                if (side.size() <= 1) {
+                    continue;
+                }
 
-                for (const BasicTerm& var : side) {
-                    // accept literals
-                    if (init_aut_ass.is_singleton(var)) {
+                for (const BasicTerm& t : side) {
+                    if (t.is_literal()) {
                         continue;
                     }
 
-                    // Variable is not literal
-                    if(init_aut_ass.at(var)->num_of_states() <= 1 || init_aut_ass.is_co_finite(var)) {
-                        assert(var.get_type() == BasicTermType::Variable);
-                        if (is_concat) {
-                            zstring var_name = var.get_name();  // Name of the variable
-
-                            // Check if variable was in any concatenation
-                            for (zstring n : concat_vars) {
-                                if (n == var_name) {
-                                    STRACE("str", tout << "multicontat on " << n << std::endl; );
-                                    // return l_undef;
-                                }
-                            }
-                            
-                            // Note it as a concatenation variable
-                            concat_vars.emplace_back(var_name);
-                        }
-                        continue;
+                    if (std::find(concat_vars.begin(), concat_vars.end(), t) == concat_vars.end()) {
+                        concat_vars.emplace_back(t);
+                    } else {
+                        STRACE("str", tout << "multiconcat on " << t.to_string() << std::endl; );
+                        return l_undef;
                     }
 
-                    STRACE("str", tout << "len: Not suitable because of " << var << std::endl; );
+                    STRACE("str", tout << "term " << t << "is inappropriate for len dec proc\n"; );
                     return l_undef;
                 }
             }
@@ -1275,11 +1266,26 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
             LenNode(LenFormulaType::AND, this->computed_len_formula)
         });
 
+        for (const auto& t : init_aut_ass) {
+            BasicTerm term = t.first;
+            std::set<smt::noodler::BasicTerm> vars_in_eqs = this->formula.get_vars();    // Variables in all predicates
+
+            // term does not appear in any predicate
+            if (vars_in_eqs.find(term) == vars_in_eqs.end()) {
+                len_formula.succ.emplace_back(this->init_aut_ass.get_lengths(term));
+            }
+        }
+
         return {len_formula, this->precision};    
     }
 
     void LengthDecisionProcedure::init_computation() {
         STRACE("str", tout << "len: Initializing computation..." << std::endl);
+
+        zstring l1 = "aba";
+        zstring l2 = "bab";
+
+        // std::map<zstring, BasicTerm>conv {{l1, BasicTerm}}
     }
 
     lbool LengthDecisionProcedure::preprocess(PreprocessType opt, const BasicTermEqiv &len_eq_vars) {
@@ -1288,16 +1294,14 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
 
         STRACE("str", tout << "len: Preprocessing..." << std::endl);
 
+        prep_handler.remove_trivial();
+        prep_handler.reduce_diseqalities(); // only makes variable a literal or removes the disequation 
 
-        prep_handler.reduce_diseqalities();
-        STRACE("str", tout << "Reduce disequalities\n";);
-
-        for (const Predicate& pred : this->formula.get_predicates()) {
-            if (pred.get_type() == PredicateType::Inequation) {
-                prep_handler.underapprox_languages();
-                this->precision = LenNodePrecision::UNDERAPPROX;
-                STRACE("str", tout << "UNDERAPPROXIMATE languages\n";);
-            }
+        // Underapproximate if it contains inequations
+        if (this->formula.contains_pred_type(PredicateType::Inequation)) {
+            prep_handler.underapprox_languages();
+            this->precision = LenNodePrecision::UNDERAPPROX;
+            STRACE("str", tout << "UNDERAPPROXIMATE languages\n";);
         }
 
         prep_handler.propagate_eps();
@@ -1333,13 +1337,6 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
             // some automaton in the assignment is empty => we won't find solution
             return l_false;
         }
-        
-        if (this->formula.get_predicates().empty()) {
-            // preprocessing solved all (dis)equations => we set the solution (for lengths check)
-            // TODO ----v
-            // this->solution = SolvingState(this->init_aut_ass, {}, {}, {}, this->init_length_sensitive_vars, {});
-            return l_true;
-        }
 
         return l_undef;
     }
@@ -1352,26 +1349,26 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
                 STRACE("str", tout << "Can only solve word (dis)equations.\n");
                 return false;
             }
-            
-            for (const Concat& side : pred.get_params()) {
-                bool is_concat = side.size() > 1;
-
-                for (const BasicTerm& var : side) {
-                    // accept literals
-                    if (init_aut_ass.is_singleton(var)) {
-                        continue;
-                    }
-
-                    // Variables are Sigma* or co-finite
-                    if(init_aut_ass.at(var)->num_of_states() <= 1 || init_aut_ass.is_co_finite(var)) {
-                        continue;
-                    }
-
-                    STRACE("str", tout << "Not suitable.\n");
-                    return false;
-                }
-            }
         }
+
+        for (const BasicTerm& t : form.get_vars()) {
+            // t has language of sigma*
+            if(init_aut_ass.at(t)->num_of_states() <= 1) {
+                    continue;
+            }
+
+            // t is co-finite (we can underapproximate it)
+            if(init_aut_ass.is_co_finite(t)) {
+                continue;
+            }
+
+            // t is a literal
+            if(init_aut_ass.is_singleton(t)) {
+                continue;
+            }
+            return false;
+        }
+
         STRACE("str", tout << "Suitable.\n"; );
         return true;
     }
