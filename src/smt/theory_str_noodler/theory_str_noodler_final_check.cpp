@@ -537,10 +537,11 @@ namespace smt::noodler {
         STRACE("str", tout << "Trying length-based procedure" << std::endl);
 
         LengthDecisionProcedure nproc(instance, aut_assignment, init_length_sensitive_vars, m_params);
+        expr_ref block_len(m.mk_false(), m);
         if (nproc.preprocess() == l_false) {
+            block_curr_len(block_len);
             return l_false;
         }
-        expr_ref block_len(m.mk_false(), m);
         nproc.init_computation();
         while (true) {
             lbool result = nproc.compute_next_solution();
