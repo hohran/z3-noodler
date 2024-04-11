@@ -479,6 +479,7 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
         if (!in_pool) {
             zstring fresh = util::mk_noodler_var_fresh("f").get_name();
             pool[fresh] = VarConstraint(fresh);
+            pool[fresh].add(pred, lit_conversion);
         }
     }
 
