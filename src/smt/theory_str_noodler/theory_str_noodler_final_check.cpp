@@ -552,7 +552,7 @@ namespace smt::noodler {
                 } else {
                     STRACE("str", tout << "length-based procedure len unsat" <<  mk_pp(lengths, m) << std::endl;);
                     if (nproc.precision != LenNodePrecision::UNDERAPPROX) {
-                        block_len = m.mk_or(block_len, lengths);
+                        // block_len = m.mk_or(block_len, lengths);
                         block_curr_len(block_len);
                         return l_false;
                     } else {
