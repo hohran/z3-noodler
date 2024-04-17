@@ -550,16 +550,16 @@ namespace smt::noodler {
                 if (check_len_sat(lengths) == l_true) {
                     return l_true;
                 } else {
-                    STRACE("str", tout << "length-based procedure len unsat" <<  mk_pp(lengths, m) << std::endl;);
+                    STRACE("str", tout << "length-based procedure len unsat: " <<  mk_pp(lengths, m) << std::endl;);
                     if (nproc.precision != LenNodePrecision::UNDERAPPROX) {
                         // block_len = m.mk_or(block_len, lengths);
-                        block_curr_len(block_len);
+                        block_curr_len(lengths);
                         return l_false;
                     } else {
                         return l_undef;
                     }
                 }
-            } else if (result == l_false) {
+            } else if (result == l_false) { // never happens
 
                 // we did not find a solution (with satisfiable length constraints)
                 // we need to block current assignment
