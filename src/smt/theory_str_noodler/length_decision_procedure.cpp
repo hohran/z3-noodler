@@ -481,6 +481,8 @@ namespace smt::noodler {
         prep_handler.remove_trivial();
         STRACE("str", tout << "Remove trivial\n";);
 
+        prep_handler.replace_vars_with_lits();
+
         prep_handler.propagate_variables();
         
         // Refresh the instance
