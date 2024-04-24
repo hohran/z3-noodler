@@ -457,10 +457,13 @@ namespace smt::noodler {
         prep_handler.reduce_diseqalities(); // only makes variable a literal or removes the disequation 
 
         // Underapproximate if it contains inequations
-        if (this->formula.contains_pred_type(PredicateType::Inequation)) {
-            prep_handler.underapprox_languages();
-            this->precision = LenNodePrecision::UNDERAPPROX;
-            STRACE("str", tout << "UNDERAPPROXIMATE languages\n";);
+        for (const BasicTerm& t : this->formula.get_vars()) {
+            if (prep_handler.get_aut_assignment().is_co_finite(t)) {
+                prep_handler.underapprox_languages();
+                this->precision = LenNodePrecision::UNDERAPPROX;
+                STRACE("str", tout << "UNDERAPPROXIMATE languages\n";);
+                break;
+            }
         }
 
         prep_handler.propagate_eps();
@@ -523,7 +526,7 @@ namespace smt::noodler {
                 continue;
             }
 
-            // t is a literal
+            // t is a literal - get shortest words
             if(init_aut_ass.is_singleton(t)) {
                 continue;
             }
