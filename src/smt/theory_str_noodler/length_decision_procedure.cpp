@@ -1327,6 +1327,8 @@ void add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) 
         prep_handler.remove_trivial();
         STRACE("str", tout << "Remove trivial\n";);
 
+        prep_handler.replace_vars_with_lits();
+
         prep_handler.propagate_variables();
         
         // Refresh the instance
