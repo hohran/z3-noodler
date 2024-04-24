@@ -561,6 +561,14 @@ namespace smt::noodler {
             BasicTerm term = t.first;
             if (term.is_variable() && this->aut_ass.is_singleton(term)) {
                 // aut_ass[term]
+                auto aut = *this->aut_ass.at(term);
+                aut.trim();
+                auto words = aut.get_words(aut.delta.num_of_transitions());
+                assert(words.size() == 1);
+                auto word = *(words.begin());
+                zstring lit_val (word.size(), &(word[0]));
+                BasicTerm lit (BasicTermType::Literal, lit_val);
+                this->formula.replace({term}, {lit});
             }
         }
     }
