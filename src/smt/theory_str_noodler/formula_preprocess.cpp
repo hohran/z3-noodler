@@ -362,7 +362,7 @@ namespace smt::noodler {
      * @brief Propagate variables. Propagate all equations of the form X=Y
      * (find all Y in the formula and replace with X).
      */
-    void FormulaPreprocessor::propagate_variables() {
+    void FormulaPreprocessor::propagate_variables() {//
         std::vector<std::pair<size_t, Predicate>> regs;
         this->formula.get_simple_eqs(regs);
         std::deque<size_t> worklist;
@@ -570,6 +570,38 @@ namespace smt::noodler {
                 BasicTerm lit (BasicTermType::Literal, lit_val);
                 this->formula.replace({term}, {lit});
             }
+        }
+    }
+
+
+    void FormulaPreprocessor::my_separate_eqs() {
+        std::set<size_t> rem_ids {};
+        std::set<std::pair<size_t, Predicate>> new_preds;
+        size_t index = this->formula.get_max_index() + 1;
+
+        for (const auto& p : this->formula.get_predicates()) {
+            auto pred = p.second;
+            if (pred.get_left_side().size() == 1 && pred.get_left_side()[0].is_variable())
+                continue;
+            pred = pred.get_switched_sides_predicate();
+            if (pred.get_left_side().size() == 1 && pred.get_left_side()[0].is_variable()) {
+                rem_ids.insert(p.first);
+                new_preds.insert({index++,pred});
+                continue;
+            }
+
+            BasicTerm fresh_var = util::mk_noodler_var_fresh("f");
+            Predicate(PredicateType::Equation, {{fresh_var},{pred.get_left_side()}});
+            new_preds.insert({ index++,Predicate(PredicateType::Equation, {{fresh_var},{pred.get_left_side()}}) });
+            new_preds.insert({ index++,Predicate(PredicateType::Equation, {{fresh_var},{pred.get_right_side()}}) });
+            rem_ids.insert(p.first);
+        }
+
+        for(const size_t & i : rem_ids) {
+            this->formula.remove_predicate(i);
+        }
+        for(const auto &pr : new_preds) {
+            this->formula.add_predicate(pr.second, pr.first);
         }
     }
 

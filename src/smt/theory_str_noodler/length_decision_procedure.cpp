@@ -104,6 +104,16 @@ namespace smt::noodler {
         return true;
     }
 
+    LenNode VarConstraint::align_terms_off(const BasicTerm& t1, const BasicTerm& t2, const std::map<zstring, BasicTerm>& conv) {
+        LenNode t1_val = (t1.is_variable()) ? LenNode(t1) : LenNode(conv.at(t1.get_name()));
+        LenNode t2_val = (t2.is_variable()) ? LenNode(t2) : LenNode(conv.at(t2.get_name()));
+
+        return LenNode(LenFormulaType::OR, {
+            LenNode(LenFormulaType::LEQ, {LenNode(LenFormulaType::PLUS, {begin_of(t1.get_name(), this->_name), t1_val}), begin_of(t2.get_name(), this->_name)}),
+            LenNode(LenFormulaType::LEQ, {LenNode(LenFormulaType::PLUS, {begin_of(t2.get_name(), this->_name), t2_val}), begin_of(t1.get_name(), this->_name)})
+        });
+    }
+
     LenNode VarConstraint::align_literals(const zstring& l1, const zstring& l2, const std::map<zstring, BasicTerm>& conv) {
         zstring l1_val = conv.at(l1).get_name();
         zstring l2_val = conv.at(l2).get_name();
@@ -140,12 +150,82 @@ namespace smt::noodler {
         return LenNode(LenFormulaType::OR, align);
     }
 
+    // LenNode VarConstraint::get_lengths(const std::map<zstring,VarConstraint>& pool, const std::map<zstring,BasicTerm>& conv) {
+    //     std::vector<LenNode> form{};
+
+    //     // lits alignment
+    //     for (const auto& a : _alignments) {
+    //         form.emplace_back(align_literals(a.first, a.second, conv));
+    //     }
+
+    //     // kontys constraints e.g. x = uvw -> |x| = |u|+|v|+|w|
+    //     // TODO: only generate restrictrions for length sensitive variables
+    //     for (const Concat& side : _constr_eqs) {
+    //         // bool unconstrained = true;    // there are unconstrained variables
+    //         std::vector<LenNode> side_len {};
+
+    //         for (const BasicTerm& t : side) {
+    //             if (t.get_type() == BasicTermType::Literal) {
+    //                 side_len.emplace_back(conv.at(t.get_name()));
+    //             } else {
+    //                 side_len.emplace_back(t);
+    //             }
+    //         }
+
+    //         form.emplace_back(generate_kontys(side_len));
+    //     }
+
+    //     // begin constraints
+    //     for (const Concat& side : _constr_eqs) {
+    //         BasicTerm last (BasicTermType::Length);
+    //         // bool precise = true;    // there is no immediately previous filler variable
+
+    //         for (const BasicTerm& t : side) {
+    //             form.emplace_back(generate_begin(t.get_name(), last));
+    //             if (t.get_type() == BasicTermType::Variable && pool.count(t.get_name())) {
+    //                 for (const zstring& lit : pool.at(t.get_name()).get_lits()) {
+    //                     form.emplace_back(generate_begin(lit, t.get_name()));
+    //                 }
+    //             }
+    //             last = t;
+    //         }
+
+    //         // if (last.get_type() != BasicTermType::Length) {
+    //         //     // form.emplace_back(generate_end_var(last.get_name()));
+    //         //     // Watch out for approximation
+    //         // }
+
+    //         // With even the filler variables
+            
+    //     }
+
+    //     STRACE("str",
+    //         tout << "Length constraints on variable " << this->_name << "\n-----\n";
+    //         for (LenNode c : form) {
+    //             tout << c << std::endl;
+    //         }
+    //         tout << "-----\n\n";
+    //     );
+
+
+    //     return LenNode(LenFormulaType::AND, form);
+    // }
+
+    LenNode VarConstraint::align_terms(const BasicTerm& t1, const BasicTerm& t2, const std::map<zstring, BasicTerm>& conv) {
+        if (t1.is_variable() || t2.is_variable()) {
+            return align_terms_off(t1, t2, conv);
+        } else {
+            return align_literals(t1.get_name(), t2.get_name(), conv);
+        }
+    }
+
     LenNode VarConstraint::get_lengths(const std::map<zstring,VarConstraint>& pool, const std::map<zstring,BasicTerm>& conv) {
         std::vector<LenNode> form{};
 
         // lits alignment
         for (const auto& a : _alignments) {
-            form.emplace_back(align_literals(a.first, a.second, conv));
+            // form.emplace_back(align_literals(a.first, a.second, conv));
+            form.emplace_back(align_terms(a.first, a.second, conv));
         }
 
         // kontys constraints e.g. x = uvw -> |x| = |u|+|v|+|w|
@@ -227,7 +307,11 @@ namespace smt::noodler {
         return out;
     }
 
-    bool VarConstraint::parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv) {
+    const std::vector<BasicTerm>& VarConstraint::get_align_terms() const {
+        return this->_to_align;
+    }
+
+    bool VarConstraint::parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv, const std::vector<BasicTerm>& multiconcat_vars) {
         if (is_parsed == l_true) {
             return true;	// Already parsed
         }
@@ -238,35 +322,46 @@ namespace smt::noodler {
 
         is_parsed = l_undef;	// Currently in parsing
 
-        // parse derived
         for (const Concat& side : _constr_eqs) {
-            std::vector<zstring> lits_in_side {};
+            // std::vector<zstring> lits_in_side {};
+            std::vector<BasicTerm> to_align_in_side {};
             for (const BasicTerm& t : side) {
                 if (t.get_type() == BasicTermType::Literal) {
-                    lits_in_side.emplace_back(t.get_name());
+                    to_align_in_side.emplace_back(t);
                 }
                 if (t.get_type() == BasicTermType::Variable) {
                     // parse constrained variables
                     if (pool.count(t.get_name())) {
-                        if (pool[t.get_name()].parse(pool, conv) == false) {
+                        if (pool[t.get_name()].parse(pool, conv, multiconcat_vars) == false) {
                             return false;	// There is a cycle
                         }
-
-                        for (const zstring& lit : pool[t.get_name()].get_lits()) {
-                            lits_in_side.emplace_back(lit);
+                        for (const BasicTerm& at : pool.at(t.get_name()).get_align_terms()) {
+                            to_align_in_side.emplace_back(at);
                         }
+                    }
+
+                    if (std::find(multiconcat_vars.begin(), multiconcat_vars.end(), t) != multiconcat_vars.end()) {
+                        to_align_in_side.emplace_back(t);
                     }
                 }
             }
 
-            for (const zstring& l1 : _lits) {
-                for (const zstring& l2 : lits_in_side) {
-                    _alignments.emplace_back(l1, l2);
+            // for (const zstring& l1 : _lits) {
+            //     for (const zstring& l2 : lits_in_side) {
+            //         _alignments.emplace_back(l1, l2);
+            //     }
+            // }
+            for (const BasicTerm& at1 : _to_align) {
+                for (const BasicTerm& at2 : to_align_in_side) {
+                    _alignments.emplace_back(at1, at2);
                 }
             }
 
-            for (const zstring& l : lits_in_side) {
-                _lits.emplace_back(l);
+            // for (const zstring& l : lits_in_side) {
+            //     _lits.emplace_back(l);
+            // }
+            for (const BasicTerm& at : to_align_in_side) {
+                _to_align.emplace_back(at);
             }
         }
 
@@ -275,6 +370,56 @@ namespace smt::noodler {
         
         return true;
     }
+
+
+    // bool VarConstraint::parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv) {
+    //     if (is_parsed == l_true) {
+    //         return true;	// Already parsed
+    //     }
+
+    //     if (is_parsed == l_undef) {
+    //         return false;	// Cycle
+    //     }
+
+    //     is_parsed = l_undef;	// Currently in parsing
+
+    //     // parse derived
+    //     for (const Concat& side : _constr_eqs) {
+    //         std::vector<zstring> lits_in_side {};
+    //         for (const BasicTerm& t : side) {
+    //             if (t.get_type() == BasicTermType::Literal) {
+    //                 lits_in_side.emplace_back(t.get_name());
+    //             }
+    //             if (t.get_type() == BasicTermType::Variable) {
+    //                 // parse constrained variables
+    //                 if (pool.count(t.get_name())) {
+    //                     if (pool[t.get_name()].parse(pool, conv) == false) {
+    //                         return false;	// There is a cycle
+    //                     }
+
+    //                     for (const zstring& lit : pool[t.get_name()].get_lits()) {
+    //                         lits_in_side.emplace_back(lit);
+    //                     }
+    //                 }
+    //             }
+    //         }
+
+    //         for (const zstring& l1 : _lits) {
+    //             for (const zstring& l2 : lits_in_side) {
+    //                 _alignments.emplace_back(l1, l2);
+    //             }
+    //         }
+
+    //         for (const zstring& l : lits_in_side) {
+    //             _lits.emplace_back(l);
+    //         }
+    //     }
+
+    //     is_parsed = l_true;
+
+        
+    //     return true;
+    // }
 
     std::string VarConstraint::to_string() const {
         std::string ret = "#####\n# VarConstraint: " + _name.encode() + "\n###\n#";
@@ -316,30 +461,100 @@ namespace smt::noodler {
         return new_lit_name;
     }
 
+    // void LengthDecisionProcedure::add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) {
+    //     bool in_pool = false;
+
+    //     for (const Concat& side : pred.get_params()) {
+    //         if (side.size() == 1 && side[0].get_type() == BasicTermType::Variable) {
+    //             zstring var_name = side[0].get_name();
+    //             if (pool.count(var_name) == 0) {
+    //                 pool[var_name] = VarConstraint(var_name);
+    //             }
+    //             pool[var_name].add(pred, lit_conversion);
+
+    //             in_pool = true;
+    //         }
+    //     }
+
+    //     if (!in_pool) {
+    //         zstring fresh = util::mk_noodler_var_fresh("f").get_name();
+    //         pool[fresh] = VarConstraint(fresh);
+    //         pool[fresh].add(pred, lit_conversion);
+    //     }
+    // }
+    
     void LengthDecisionProcedure::add_to_pool(std::map<zstring, VarConstraint>& pool, const Predicate& pred) {
-        bool in_pool = false;
+        assert(pred.get_left_side().size() == 1 && pred.get_left_side()[0].is_variable());
+        zstring constrvar_name = pred.get_left_side()[0].get_name();
 
-        for (const Concat& side : pred.get_params()) {
-            if (side.size() == 1 && side[0].get_type() == BasicTermType::Variable) {
-                zstring var_name = side[0].get_name();
-                if (pool.count(var_name) == 0) {
-                    pool[var_name] = VarConstraint(var_name);
-                }
-                pool[var_name].add(pred, lit_conversion);
-
-                in_pool = true;
-            }
+        if (pool.count(constrvar_name) == 0) {
+            pool[constrvar_name] = VarConstraint(constrvar_name);
         }
-
-        if (!in_pool) {
-            zstring fresh = util::mk_noodler_var_fresh("f").get_name();
-            pool[fresh] = VarConstraint(fresh);
-            pool[fresh].add(pred, lit_conversion);
-        }
+        pool[constrvar_name].emplace(pred.get_right_side(), lit_conversion);
     }
 
 
     ///////////////////////////////////
+
+    /**
+     * @brief Check if t1 is dependent on t2
+     * 
+     * @param t1 
+     * @param t2 
+     * @param dependency_graph ACYCLIC tree with all dependencies
+     * @return true - t1 is dependent on t2
+     */
+    bool check_dependency_inner(const BasicTerm& t1, const BasicTerm& t2, const std::map<BasicTerm,BasicTerm>& dependency_graph) {
+        if (t1 == t2) {
+            return true;
+        }
+
+        BasicTerm child = t1;
+        while (true) {
+            if (dependency_graph.count(child) == 0) 
+                break;
+            
+            BasicTerm parent = dependency_graph.at(child);
+            if (parent == t2)
+                return true;
+            
+            child = parent;         
+        }
+        return false;
+    }
+
+    /**
+     * @brief Check if t1 and t2 are dependent
+     * 
+     * @param t1 basicterm to check
+     * @param t2 basicterm to check
+     * @param dependency_graph ACYCLIC tree with all dependencies
+     * @return true - dependent
+     */
+    bool check_dependency(const BasicTerm& t1, const BasicTerm& t2, const std::map<BasicTerm,BasicTerm>& dependency_graph) {
+        if (check_dependency_inner(t1, t2, dependency_graph))
+            return true;
+        if (check_dependency_inner(t2, t1, dependency_graph))
+            return true;
+        return false;
+    }
+
+    /**
+     * @brief check if there are dependent terms in to_check
+     * 
+     * @param to_check vector of terms
+     * @param dependency_graph ACYCLIC tree with all dependencies
+     * @return true - dependent
+     */
+    bool check_dependencies(const std::vector<BasicTerm>& to_check, const std::map<BasicTerm,BasicTerm>& dependency_graph) {
+        for (size_t i = 0; i < to_check.size(); i++) {
+            for (size_t j = i+1; j < to_check.size(); j++) {
+                if (check_dependency(to_check[i], to_check[j], dependency_graph))
+                    return true;
+            }
+        }
+        return false;
+    }
 
     lbool LengthDecisionProcedure::compute_next_solution() {
         // TODO: add underapprox for multiconcat on vars from different parent vars
@@ -355,34 +570,68 @@ namespace smt::noodler {
         );
 
         // Check for suitability
-        std::vector<BasicTerm> concat_vars = {};	// variables that have appeared in concatenation 
+        // std::vector<BasicTerm> concat_vars = {}; 
+        std::map<BasicTerm,BasicTerm> conc = {};	// variables that have appeared in concatenation
+        std::map<BasicTerm,std::vector<BasicTerm>> multiconc = {};	// variables that have appeared in concatenation more than once -> their constrained variables
         
-        // TODO: compact to a function
+        // // TODO: compact to a function
+        // for (const Predicate& pred : this->formula.get_predicates()) {
+        //     for (const Concat& side : pred.get_params()) {
+        //         if (side.size() <= 1) {
+        //             continue;
+        //         }
+
+        //         for (const BasicTerm& t : side) {
+        //             if (t.is_literal()) {
+        //                 continue;
+        //             }
+
+        //             if (std::find(concat_vars.begin(), concat_vars.end(), t) == concat_vars.end()) {
+        //                 concat_vars.emplace_back(t);
+        //                 continue;
+        //             } else {
+        //                 STRACE("str", tout << "multiconcat on " << t.to_string() << std::endl; );
+        //                 return l_undef;
+        //             }
+
+        //             STRACE("str", tout << "term " << t << "is inappropriate for len dec proc\n"; );
+        //             return l_undef;
+        //         }
+        //     }
+        // }
+        // // End check for suitability
+
         for (const Predicate& pred : this->formula.get_predicates()) {
-            for (const Concat& side : pred.get_params()) {
-                if (side.size() <= 1) {
+            assert(pred.get_left_side().size() == 1 && pred.get_left_side()[0].is_variable());
+            BasicTerm constrvar = pred.get_left_side()[0];
+
+            for (const BasicTerm& t : pred.get_right_side()) {
+                if (t.is_literal())
+                    continue;
+                
+                if (conc.count(t) == 0) {
+                    conc.insert({t,constrvar});
                     continue;
                 }
 
-                for (const BasicTerm& t : side) {
-                    if (t.is_literal()) {
-                        continue;
-                    }
-
-                    if (std::find(concat_vars.begin(), concat_vars.end(), t) == concat_vars.end()) {
-                        concat_vars.emplace_back(t);
-                        continue;
-                    } else {
-                        STRACE("str", tout << "multiconcat on " << t.to_string() << std::endl; );
-                        return l_undef;
-                    }
-
-                    STRACE("str", tout << "term " << t << "is inappropriate for len dec proc\n"; );
-                    return l_undef;
+                // t has already appeared in concatenation
+                if (multiconc.count(t) == 0) {
+                    multiconc.insert({t,{conc.at(t)}});    // create new map with the first cvar of t
                 }
+                multiconc[t].emplace_back(constrvar);
             }
         }
-        // End check for suitability
+
+        std::vector<BasicTerm> multiconcat_vars = {};
+        for (const std::pair<BasicTerm,std::vector<BasicTerm>>& it : multiconc) {
+            if (check_dependencies(it.second, conc) == true) {
+                STRACE("str", tout << "len: term " << it.first << " appears way too much.\n"; );
+                return l_undef;
+            }
+
+            multiconcat_vars.emplace_back(it.first);
+            this->precision = LenNodePrecision::UNDERAPPROX;
+        }
 
         STRACE("str", tout << "Proceeding to computing length constraints.\n"; );
 
@@ -401,7 +650,7 @@ namespace smt::noodler {
         );  
 
         for (std::pair<zstring, VarConstraint> it : pool) {
-            if (pool[it.first].parse(pool, lit_conversion) == false) {
+            if (pool[it.first].parse(pool, lit_conversion, multiconcat_vars) == false) {
                 // There is a cycle
                 STRACE("str", tout << "len: Cyclic dependecy.\n";);
                 return l_undef;	// We cannot solve this formula
@@ -482,6 +731,7 @@ namespace smt::noodler {
         STRACE("str", tout << "Remove trivial\n";);
 
         prep_handler.replace_vars_with_lits();
+        prep_handler.my_separate_eqs();
 
         prep_handler.propagate_variables();
         

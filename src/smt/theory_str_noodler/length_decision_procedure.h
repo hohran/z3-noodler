@@ -22,12 +22,13 @@ namespace smt::noodler {
         std::vector<Concat> _constr_eqs;	// All sides of equations on the opposite side of this variable
 
         std::vector<zstring> _lits; // Literals occuring explicitly and in contained variables
+        std::vector<BasicTerm> _to_align; // terms to be aligned
 
-        std::vector<std::pair<zstring, zstring>> _alignments;   // All literals, that should be aligned
+        // std::vector<std::pair<zstring, zstring>> _alignments;   // All literals, that should be aligned
+        std::vector<std::pair<BasicTerm, BasicTerm>> _alignments;   // All literals, that should be aligned
 
         // std::map<zstring, zstring>& conv;
         bool check_side(const Concat& side);
-        void emplace(const Concat& c, std::map<zstring, BasicTerm>& lit_conversion);
 
         LenNode generate_begin(const zstring& var_name, const BasicTerm& last, bool precise=true);
         LenNode generate_begin(const zstring& lit, const zstring& from);
@@ -36,7 +37,10 @@ namespace smt::noodler {
         LenNode generate_kontys(const std::vector<LenNode>& side_len);
 
         LenNode align_literals(const zstring& l1, const zstring& l2, const std::map<zstring, BasicTerm>& conv);
+        LenNode align_terms(const BasicTerm& t1, const BasicTerm& t2, const std::map<zstring, BasicTerm>& conv);
+        LenNode align_terms_off(const BasicTerm& t1, const BasicTerm& t2, const std::map<zstring, BasicTerm>& conv);
     public:
+        void emplace(const Concat& c, std::map<zstring, BasicTerm>& lit_conversion);
         lbool is_parsed;
         VarConstraint() : _name(), is_parsed (l_false) {};
         VarConstraint(zstring name) : _name(std::move(name)), is_parsed (l_false) {};
@@ -45,6 +49,7 @@ namespace smt::noodler {
 
         // !!! Must be called after parse !!!
         const std::vector<zstring>& get_lits() const;
+        const std::vector<BasicTerm>& get_align_terms() const;
 
 
         // TODO: already generate here
@@ -56,6 +61,7 @@ namespace smt::noodler {
          * @return bool success
          */
         bool parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv);
+        bool parse(std::map<zstring,VarConstraint>& pool, std::map<zstring,BasicTerm>& conv, const std::vector<BasicTerm>& multiconcat_vars);
 
         LenNode get_lengths(const std::map<zstring,VarConstraint>& pool, const std::map<zstring,BasicTerm>& conv);
 

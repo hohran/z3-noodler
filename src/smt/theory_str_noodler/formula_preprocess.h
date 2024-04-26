@@ -387,6 +387,7 @@ namespace smt::noodler {
         void conversions_validity(std::vector<TermConversion>& conversions);
 
         void replace_vars_with_lits();
+        void my_separate_eqs();
 
         /**
          * @brief Replace all occurrences of find with replace. Warning: do not modify the automata assignment.
