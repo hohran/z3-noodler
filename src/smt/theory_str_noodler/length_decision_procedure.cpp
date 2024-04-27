@@ -253,8 +253,11 @@ namespace smt::noodler {
             for (const BasicTerm& t : side) {
                 form.emplace_back(generate_begin(t.get_name(), last));
                 if (t.get_type() == BasicTermType::Variable && pool.count(t.get_name())) {
-                    for (const zstring& lit : pool.at(t.get_name()).get_lits()) {
-                        form.emplace_back(generate_begin(lit, t.get_name()));
+                    // for (const zstring& lit : pool.at(t.get_name()).get_lits()) {
+                    //     form.emplace_back(generate_begin(lit, t.get_name()));
+                    // }
+                    for (const BasicTerm& at : pool.at(t.get_name()).get_align_terms()) {
+                        form.emplace_back(generate_begin(at.get_name(), t.get_name()));
                     }
                 }
                 last = t;
