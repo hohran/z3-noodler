@@ -734,9 +734,10 @@ namespace smt::noodler {
         STRACE("str", tout << "Remove trivial\n";);
 
         prep_handler.replace_vars_with_lits();
+        STRACE("str", tout << "Replace variables with literals\n";);
         prep_handler.my_separate_eqs();
+        STRACE("str", tout << "My separate eqs\n";);
 
-        prep_handler.propagate_variables();
         
         // Refresh the instance
         this->formula = prep_handler.get_modified_formula();

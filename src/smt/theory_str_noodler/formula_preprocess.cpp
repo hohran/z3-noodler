@@ -591,7 +591,6 @@ namespace smt::noodler {
             }
 
             BasicTerm fresh_var = util::mk_noodler_var_fresh("f");
-            Predicate(PredicateType::Equation, {{fresh_var},{pred.get_left_side()}});
             new_preds.insert({ index++,Predicate(PredicateType::Equation, {{fresh_var},{pred.get_left_side()}}) });
             new_preds.insert({ index++,Predicate(PredicateType::Equation, {{fresh_var},{pred.get_right_side()}}) });
             rem_ids.insert(p.first);
